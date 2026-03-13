@@ -1,630 +1,1363 @@
+#!/usr/bin/env python3
 """
-Autoresearch pretraining script. Single-GPU, single-file.
-Cherry-picked and simplified from nanochat.
-Usage: uv run train.py
+AudioDepthFOA V2: Joint depth estimation + SH Order-5 prediction from binaural echoes.
+
+Consolidated training, validation, and testing script.
+
+Usage:
+    python train.py --mode train [options]
+    python train.py --mode test  [options]
 """
 
-import os
-os.environ["PYTORCH_ALLOC_CONF"] = "expandable_segments:True"
-os.environ["HF_HUB_DISABLE_PROGRESS_BARS"] = "1"
-
-import gc
+import argparse
 import math
+import functools
+import os
 import time
-from dataclasses import dataclass, asdict
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from torch.utils.data import Dataset, DataLoader
 
-from kernels import get_kernel
-cap = torch.cuda.get_device_capability()
-# varunneal's FA3 is Hopper only, use kernels-community on non-Hopper GPUs
-repo = "varunneal/flash-attention-3" if cap == (9, 0) else "kernels-community/flash-attn3"
-fa3 = get_kernel(repo).flash_attn_interface
+import torchaudio
+import torchaudio.transforms as T
 
-from prepare import MAX_SEQ_LEN, TIME_BUDGET, Tokenizer, make_dataloader, evaluate_bpb
+from scipy.special import lpmv
+from scipy.special import factorial as sp_factorial
+from PIL import Image
 
-# ---------------------------------------------------------------------------
-# GPT Model
-# ---------------------------------------------------------------------------
-
-@dataclass
-class GPTConfig:
-    sequence_len: int = 2048
-    vocab_size: int = 32768
-    n_layer: int = 12
-    n_head: int = 6
-    n_kv_head: int = 6
-    n_embd: int = 768
-    window_pattern: str = "SSSL"
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
 
-def norm(x):
-    return F.rms_norm(x, (x.size(-1),))
+# ============================================================
+# Configuration
+# ============================================================
+
+class Cfg:
+    """Simple nested namespace for configuration."""
+    def __init__(self, **kw):
+        for k, v in kw.items():
+            setattr(self, k, v)
+
+    def __repr__(self):
+        items = ', '.join(f'{k}={v!r}' for k, v in self.__dict__.items())
+        return f'Cfg({items})'
 
 
-def has_ve(layer_idx, n_layer):
-    """Returns True if layer should have Value Embedding (alternating, last always included)."""
-    return layer_idx % 2 == (n_layer - 1) % 2
+def make_config(args):
+    """Build a config object from parsed CLI arguments."""
+    cfg = Cfg(
+        dataset=Cfg(
+            name='soundspaces',
+            dataset_dir=args.dataset_dir,
+            split_ratio=[0.8, 0.1, 0.1],
+            split_seed=42,
+            input_type='echoes',
+            audio_format='spectrogram',
+            depth_type='erp',
+            preprocess='resize',
+            depth_norm=True,
+            images_size=[256, 512],
+            min_depth=0.01,
+            max_depth=10.0,
+            use_ambisonic=True,
+        ),
+        model=Cfg(
+            name='audio_depth_foa_v2',
+            generator='unet_256',
+            proj_dim=128,
+            foa_dim=4,
+            sh_order=5,
+            scale_shift_hidden=256,
+            scale_shift_layers=4,
+            depth_weight=1.0,
+            foa_weight=0.1,
+            foa_use_cosine=True,
+            foa_cosine_weight=0.1,
+            hist_weight=0.1,
+            latent_reg_weight=0.0,
+            foa_freeze_epochs=args.foa_freeze_epochs,
+        ),
+        mode=Cfg(
+            mode=args.mode,
+            batch_size=args.batch_size,
+            epochs=args.epochs,
+            learning_rate=args.lr,
+            optimizer=args.optimizer,
+            validation=True,
+            validation_iter=5,
+            saving_checkpoints=10,
+            shuffle=True,
+            num_threads=args.num_workers,
+            checkpoints=args.checkpoint,
+            use_l1=True,
+            use_berhu=True,
+            use_silog=False,
+            use_gradient=False,
+            use_ssim=False,
+            w_l1=1.0,
+            w_berhu=0.5,
+            w_silog=0.5,
+            w_gradient=0.5,
+            w_ssim=0.5,
+            experiment_name=args.experiment_name,
+            eval_on=args.eval_on,
+            vis_every=args.vis_every,
+        ),
+    )
+    return cfg
 
 
-def apply_rotary_emb(x, cos, sin):
-    assert x.ndim == 4
-    d = x.shape[3] // 2
-    x1, x2 = x[..., :d], x[..., d:]
-    y1 = x1 * cos + x2 * sin
-    y2 = x1 * (-sin) + x2 * cos
-    return torch.cat([y1, y2], 3)
+# ============================================================
+# SH basis computation (ACN / SN3D)
+# ============================================================
+
+def _acn_to_nm(acn):
+    n = int(math.floor(math.sqrt(acn)))
+    m = acn - n * n - n
+    return n, m
 
 
-class CausalSelfAttention(nn.Module):
-    def __init__(self, config, layer_idx):
+def _sn3d_norm(n, m):
+    m_abs = abs(m)
+    delta = 1.0 if m == 0 else 0.0
+    return math.sqrt((2.0 - delta) * sp_factorial(n - m_abs, exact=True)
+                     / sp_factorial(n + m_abs, exact=True))
+
+
+def _real_sh_sn3d_np(acn, elevation, azimuth):
+    n, m = _acn_to_nm(acn)
+    m_abs = abs(m)
+    N = _sn3d_norm(n, m)
+    P = (-1)**m_abs * lpmv(m_abs, n, np.sin(elevation))
+    if m > 0:
+        return N * P * np.cos(m * azimuth)
+    elif m == 0:
+        return N * P
+    else:
+        return N * P * np.sin(m_abs * azimuth)
+
+
+def sh_basis_erp(max_order, H, W, dtype=torch.float32):
+    """Compute real SH basis functions up to given order on ERP grid.
+    Returns tensor of shape [(max_order+1)^2, H, W]."""
+    n_ch = (max_order + 1) ** 2
+    theta = np.linspace(0, np.pi, H)
+    phi = np.linspace(-np.pi, np.pi, W)
+    phi_grid, theta_grid = np.meshgrid(phi, theta)
+    elevation = np.pi / 2 - theta_grid
+    azimuth = phi_grid
+
+    basis = np.zeros((n_ch, H, W), dtype=np.float64)
+    for q in range(n_ch):
+        basis[q] = _real_sh_sn3d_np(q, elevation, azimuth)
+    return torch.from_numpy(basis).to(dtype)
+
+
+def sh_basis_matrix(max_order, elevation, azimuth):
+    """Compute SH basis matrix for given grid. Returns (N_pixels, N_channels)."""
+    n_ch = (max_order + 1) ** 2
+    el_flat = elevation.ravel()
+    az_flat = azimuth.ravel()
+    B = np.zeros((el_flat.size, n_ch))
+    for q in range(n_ch):
+        B[:, q] = _real_sh_sn3d_np(q, el_flat, az_flat)
+    return B
+
+
+def reconstruct_per_component_maps(sh_coeffs, B):
+    """Reconstruct per-SH-component energy maps.
+    Args:
+        sh_coeffs: (n_ch, T) SH time-domain signals
+        B: (N_pixels, n_ch) precomputed SH basis matrix
+    Returns:
+        (n_ch, N_pixels) per-component spatial energy maps
+    """
+    n_ch = B.shape[1]
+    A = sh_coeffs[:n_ch]
+    rms = np.sqrt(np.mean(A ** 2, axis=1))
+    maps = B * rms[None, :]
+    return maps.T
+
+
+# ============================================================
+# Model: DeepScaleShift
+# ============================================================
+
+class DeepScaleShift(nn.Module):
+    """MLP-based per-channel affine transform with residual + gating."""
+
+    def __init__(self, n_channels=36, hidden_dim=256, n_hidden_layers=4, dropout=0.1):
         super().__init__()
-        self.n_head = config.n_head
-        self.n_kv_head = config.n_kv_head
-        self.n_embd = config.n_embd
-        self.head_dim = self.n_embd // self.n_head
-        assert self.n_embd % self.n_head == 0
-        assert self.n_kv_head <= self.n_head and self.n_head % self.n_kv_head == 0
-        self.c_q = nn.Linear(self.n_embd, self.n_head * self.head_dim, bias=False)
-        self.c_k = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
-        self.c_v = nn.Linear(self.n_embd, self.n_kv_head * self.head_dim, bias=False)
-        self.c_proj = nn.Linear(self.n_embd, self.n_embd, bias=False)
-        self.ve_gate_channels = 32
-        self.ve_gate = nn.Linear(self.ve_gate_channels, self.n_kv_head, bias=False) if has_ve(layer_idx, config.n_layer) else None
+        self.n_channels = n_channels
+        self.hidden_dim = hidden_dim
+        self.n_hidden_layers = n_hidden_layers
 
-    def forward(self, x, ve, cos_sin, window_size):
-        B, T, C = x.size()
-        q = self.c_q(x).view(B, T, self.n_head, self.head_dim)
-        k = self.c_k(x).view(B, T, self.n_kv_head, self.head_dim)
-        v = self.c_v(x).view(B, T, self.n_kv_head, self.head_dim)
+        layers = [nn.LayerNorm(n_channels)]
+        in_dim = n_channels
+        for i in range(n_hidden_layers):
+            layers.extend([nn.Linear(in_dim, hidden_dim), nn.GELU()])
+            if dropout > 0 and i < n_hidden_layers - 1:
+                layers.append(nn.Dropout(dropout))
+            in_dim = hidden_dim
+        layers.append(nn.Linear(hidden_dim, n_channels))
+        self.mlp = nn.Sequential(*layers)
 
-        # Value residual (ResFormer): mix in value embedding with input-dependent gate per head
-        if ve is not None:
-            ve = ve.view(B, T, self.n_kv_head, self.head_dim)
-            gate = 2 * torch.sigmoid(self.ve_gate(x[..., :self.ve_gate_channels]))
-            v = v + gate.unsqueeze(-1) * ve
+        self.gamma = nn.Parameter(torch.ones(n_channels))
+        self.beta = nn.Parameter(torch.zeros(n_channels))
+        self.gate = nn.Parameter(torch.zeros(n_channels))
+        self._init_weights()
 
-        cos, sin = cos_sin
-        q, k = apply_rotary_emb(q, cos, sin), apply_rotary_emb(k, cos, sin)
-        q, k = norm(q), norm(k)
-
-        y = fa3.flash_attn_func(q, k, v, causal=True, window_size=window_size)
-        y = y.contiguous().view(B, T, -1)
-        y = self.c_proj(y)
-        return y
-
-
-class MLP(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.c_fc = nn.Linear(config.n_embd, 4 * config.n_embd, bias=False)
-        self.c_proj = nn.Linear(4 * config.n_embd, config.n_embd, bias=False)
+    def _init_weights(self):
+        for m in self.mlp:
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight, gain=0.01)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
 
     def forward(self, x):
-        x = self.c_fc(x)
-        x = F.relu(x).square()
-        x = self.c_proj(x)
-        return x
+        residual = x * self.gamma.unsqueeze(0) + self.beta.unsqueeze(0)
+        mlp_out = self.mlp(x)
+        alpha = torch.sigmoid(self.gate).unsqueeze(0)
+        return (1 - alpha) * residual + alpha * mlp_out
 
 
-class Block(nn.Module):
-    def __init__(self, config, layer_idx):
+# ============================================================
+# Model: AudioDepthFOAV2Generator (UNet + SH branch)
+# ============================================================
+
+class AudioDepthFOAV2Generator(nn.Module):
+    """UNet encoder-decoder with SH5 auxiliary branch."""
+
+    def __init__(self, cfg, input_nc=2, output_nc=1, num_downs=8, ngf=64,
+                 use_dropout=False, proj_dim=128, foa_dim=4, sh_order=5,
+                 scale_shift_hidden=256, scale_shift_layers=4,
+                 H_erp=256, W_erp=512):
         super().__init__()
-        self.attn = CausalSelfAttention(config, layer_idx)
-        self.mlp = MLP(config)
+        self.num_downs = num_downs
+        self.depth_norm = cfg.dataset.depth_norm
+        self.proj_dim = proj_dim
+        self.foa_dim = foa_dim
+        self.sh_order = sh_order
+        self.sh_dim = (sh_order + 1) ** 2
 
-    def forward(self, x, ve, cos_sin, window_size):
-        x = x + self.attn(norm(x), ve, cos_sin, window_size)
-        x = x + self.mlp(norm(x))
-        return x
+        norm_layer = functools.partial(nn.BatchNorm2d, affine=True, track_running_stats=True)
+        use_bias = False
 
+        basis = sh_basis_erp(sh_order, H_erp, W_erp, dtype=torch.float32)
+        self.register_buffer("sh_basis", basis, persistent=False)
 
-class GPT(nn.Module):
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        self.window_sizes = self._compute_window_sizes(config)
-        self.transformer = nn.ModuleDict({
-            "wte": nn.Embedding(config.vocab_size, config.n_embd),
-            "h": nn.ModuleList([Block(config, i) for i in range(config.n_layer)]),
-        })
-        self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
-        self.resid_lambdas = nn.Parameter(torch.ones(config.n_layer))
-        self.x0_lambdas = nn.Parameter(torch.zeros(config.n_layer))
-        # Value embeddings
-        head_dim = config.n_embd // config.n_head
-        kv_dim = config.n_kv_head * head_dim
-        self.value_embeds = nn.ModuleDict({
-            str(i): nn.Embedding(config.vocab_size, kv_dim)
-            for i in range(config.n_layer) if has_ve(i, config.n_layer)
-        })
-        # Rotary embeddings
-        self.rotary_seq_len = config.sequence_len * 10
-        cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim)
-        self.register_buffer("cos", cos, persistent=False)
-        self.register_buffer("sin", sin, persistent=False)
+        self.scale_shift = DeepScaleShift(
+            n_channels=self.sh_dim,
+            hidden_dim=scale_shift_hidden,
+            n_hidden_layers=scale_shift_layers,
+        )
 
-    @torch.no_grad()
-    def init_weights(self):
-        # Embedding and unembedding
-        torch.nn.init.normal_(self.transformer.wte.weight, mean=0.0, std=1.0)
-        torch.nn.init.normal_(self.lm_head.weight, mean=0.0, std=0.001)
-        # Transformer blocks
-        n_embd = self.config.n_embd
-        s = 3**0.5 * n_embd**-0.5
-        for block in self.transformer.h:
-            torch.nn.init.uniform_(block.attn.c_q.weight, -s, s)
-            torch.nn.init.uniform_(block.attn.c_k.weight, -s, s)
-            torch.nn.init.uniform_(block.attn.c_v.weight, -s, s)
-            torch.nn.init.zeros_(block.attn.c_proj.weight)
-            torch.nn.init.uniform_(block.mlp.c_fc.weight, -s, s)
-            torch.nn.init.zeros_(block.mlp.c_proj.weight)
-        # Per-layer scalars
-        self.resid_lambdas.fill_(1.0)
-        self.x0_lambdas.fill_(0.1)
-        # Value embeddings
-        for ve in self.value_embeds.values():
-            torch.nn.init.uniform_(ve.weight, -s, s)
-        # Gate weights init to zero (sigmoid(0)=0.5, scaled by 2 -> 1.0 = neutral)
-        for block in self.transformer.h:
-            if block.attn.ve_gate is not None:
-                torch.nn.init.zeros_(block.attn.ve_gate.weight)
-        # Rotary embeddings
-        head_dim = self.config.n_embd // self.config.n_head
-        cos, sin = self._precompute_rotary_embeddings(self.rotary_seq_len, head_dim)
-        self.cos, self.sin = cos, sin
-        # Cast embeddings to bf16
-        self.transformer.wte.to(dtype=torch.bfloat16)
-        for ve in self.value_embeds.values():
-            ve.to(dtype=torch.bfloat16)
+        # Encoder
+        self.enc0 = nn.Conv2d(input_nc, ngf, 4, 2, 1)
+        encoder_layers = []
+        in_ch = ngf
+        for i in range(1, num_downs - 1):
+            out_ch = min(ngf * (2 ** i), ngf * 8)
+            encoder_layers.append(nn.Sequential(
+                nn.LeakyReLU(0.2, True),
+                nn.Conv2d(in_ch, out_ch, 4, 2, 1, bias=use_bias),
+                norm_layer(out_ch),
+            ))
+            in_ch = out_ch
+        self.encoders = nn.ModuleList(encoder_layers)
+        self.enc_inner = nn.Sequential(
+            nn.LeakyReLU(0.2, True),
+            nn.Conv2d(in_ch, ngf * 8, 4, 2, 1),
+        )
 
-    def _precompute_rotary_embeddings(self, seq_len, head_dim, base=10000, device=None):
-        if device is None:
-            device = self.transformer.wte.weight.device
-        channel_range = torch.arange(0, head_dim, 2, dtype=torch.float32, device=device)
-        inv_freq = 1.0 / (base ** (channel_range / head_dim))
-        t = torch.arange(seq_len, dtype=torch.float32, device=device)
-        freqs = torch.outer(t, inv_freq)
-        cos, sin = freqs.cos(), freqs.sin()
-        cos, sin = cos.bfloat16(), sin.bfloat16()
-        cos, sin = cos[None, :, None, :], sin[None, :, None, :]
-        return cos, sin
+        # SH Branch
+        feat_dim = ngf * 8
+        self.pool = nn.AdaptiveAvgPool2d(1)
+        self.audio_proj = nn.Sequential(
+            nn.Flatten(),
+            nn.Linear(feat_dim, feat_dim),
+            nn.BatchNorm1d(feat_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(feat_dim, proj_dim),
+        )
+        self.foa_head = nn.Sequential(
+            nn.BatchNorm1d(proj_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(proj_dim, foa_dim),
+        )
+        hoa_dim = self.sh_dim - foa_dim
+        self.hoa_head = nn.Sequential(
+            nn.BatchNorm1d(proj_dim),
+            nn.ReLU(inplace=True),
+            nn.Linear(proj_dim, hoa_dim),
+        )
 
-    def _compute_window_sizes(self, config):
-        pattern = config.window_pattern.upper()
-        assert all(c in "SL" for c in pattern)
-        long_window = config.sequence_len
-        short_window = long_window // 2
-        char_to_window = {"L": (long_window, 0), "S": (short_window, 0)}
-        window_sizes = []
-        for layer_idx in range(config.n_layer):
-            char = pattern[layer_idx % len(pattern)]
-            window_sizes.append(char_to_window[char])
-        window_sizes[-1] = (long_window, 0)
-        return window_sizes
+        # Decoder
+        decoder_layers = []
+        decoder_layers.append(nn.Sequential(
+            nn.ReLU(True),
+            nn.ConvTranspose2d(ngf * 8, ngf * 8, 4, 2, 1, bias=use_bias),
+            norm_layer(ngf * 8),
+        ))
+        for _ in range(num_downs - 5):
+            layers = [
+                nn.ReLU(True),
+                nn.ConvTranspose2d(ngf * 8 * 2, ngf * 8, 4, 2, 1, bias=use_bias),
+                norm_layer(ngf * 8),
+            ]
+            if use_dropout:
+                layers.append(nn.Dropout(0.5))
+            decoder_layers.append(nn.Sequential(*layers))
+        decoder_layers.append(nn.Sequential(
+            nn.ReLU(True),
+            nn.ConvTranspose2d(ngf * 8 * 2, ngf * 4, 4, 2, 1, bias=use_bias),
+            norm_layer(ngf * 4),
+        ))
+        decoder_layers.append(nn.Sequential(
+            nn.ReLU(True),
+            nn.ConvTranspose2d(ngf * 4 * 2, ngf * 2, 4, 2, 1, bias=use_bias),
+            norm_layer(ngf * 2),
+        ))
+        decoder_layers.append(nn.Sequential(
+            nn.ReLU(True),
+            nn.ConvTranspose2d(ngf * 2 * 2, ngf, 4, 2, 1, bias=use_bias),
+            norm_layer(ngf),
+        ))
+        self.decoders = nn.ModuleList(decoder_layers)
 
-    def estimate_flops(self):
-        """Estimated FLOPs per token (forward + backward)."""
-        nparams = sum(p.numel() for p in self.parameters())
-        value_embeds_numel = sum(ve.weight.numel() for ve in self.value_embeds.values())
-        nparams_exclude = (self.transformer.wte.weight.numel() + value_embeds_numel +
-                          self.resid_lambdas.numel() + self.x0_lambdas.numel())
-        h = self.config.n_head
-        q = self.config.n_embd // self.config.n_head
-        t = self.config.sequence_len
-        attn_flops = 0
-        for window_size in self.window_sizes:
-            window = window_size[0]
-            effective_seq = t if window < 0 else min(window, t)
-            attn_flops += 12 * h * q * effective_seq
-        return 6 * (nparams - nparams_exclude) + attn_flops
+        if self.depth_norm:
+            self.dec_outer = nn.Sequential(
+                nn.ReLU(True),
+                nn.ConvTranspose2d(ngf * 2, output_nc, 4, 2, 1),
+                nn.Sigmoid(),
+            )
+        else:
+            self.dec_outer = nn.Sequential(
+                nn.ReLU(True),
+                nn.ConvTranspose2d(ngf * 2, output_nc, 4, 2, 1),
+                nn.ReLU(),
+            )
 
-    def num_scaling_params(self):
-        wte = sum(p.numel() for p in self.transformer.wte.parameters())
-        value_embeds = sum(p.numel() for p in self.value_embeds.parameters())
-        lm_head = sum(p.numel() for p in self.lm_head.parameters())
-        transformer_matrices = sum(p.numel() for p in self.transformer.h.parameters())
-        scalars = self.resid_lambdas.numel() + self.x0_lambdas.numel()
-        total = wte + value_embeds + lm_head + transformer_matrices + scalars
-        return {
-            'wte': wte, 'value_embeds': value_embeds, 'lm_head': lm_head,
-            'transformer_matrices': transformer_matrices, 'scalars': scalars, 'total': total,
+    def reconstruct_from_coeffs(self, coeffs):
+        return (coeffs[:, :, None, None] * self.sh_basis[None]).sum(dim=1, keepdim=True)
+
+    def project_depth_to_sh(self, depth, eps=1e-6):
+        basis = self.sh_basis
+        d = depth[:, 0:1, :, :]
+        H = basis.shape[1]
+        theta = torch.linspace(0, math.pi, H, device=basis.device, dtype=basis.dtype)
+        sin_weight = torch.sin(theta)[:, None]
+        w = sin_weight[None, None, :, :]
+        num = (w * d * basis[None]).sum(dim=(2, 3))
+        den = (w * basis[None] ** 2).sum(dim=(2, 3)) + eps
+        return num / den
+
+    def forward(self, x, return_hist_maps=False):
+        enc_features = []
+        h = self.enc0(x)
+        enc_features.append(h)
+        for enc in self.encoders:
+            h = enc(h)
+            enc_features.append(h)
+        bottleneck = self.enc_inner(h)
+
+        # SH branch
+        pooled = self.pool(bottleneck)
+        foa_latent = self.audio_proj(pooled)
+        pred_foa = self.foa_head(foa_latent)
+        pred_hoa = self.hoa_head(foa_latent)
+        pred_sh = torch.cat([pred_foa, pred_hoa], dim=1)
+
+        # Decode
+        enc_reversed = enc_features[::-1]
+        h = self.decoders[0](bottleneck)
+        for i in range(len(self.decoders) - 1):
+            h = torch.cat([enc_reversed[i], h], dim=1)
+            h = self.decoders[i + 1](h)
+        h = torch.cat([enc_reversed[-1], h], dim=1)
+        pred_depth = self.dec_outer(h)
+
+        out = {
+            "pred_depth": pred_depth,
+            "foa_latent": foa_latent,
+            "pred_foa": pred_foa,
+            "pred_hoa": pred_hoa,
+            "pred_sh": pred_sh,
         }
 
-    def setup_optimizer(self, unembedding_lr=0.004, embedding_lr=0.2, matrix_lr=0.02,
-                        weight_decay=0.0, adam_betas=(0.8, 0.95), scalar_lr=0.5):
-        model_dim = self.config.n_embd
-        matrix_params = list(self.transformer.h.parameters())
-        value_embeds_params = list(self.value_embeds.parameters())
-        embedding_params = list(self.transformer.wte.parameters())
-        lm_head_params = list(self.lm_head.parameters())
-        resid_params = [self.resid_lambdas]
-        x0_params = [self.x0_lambdas]
-        assert len(list(self.parameters())) == (len(matrix_params) + len(embedding_params) +
-            len(lm_head_params) + len(value_embeds_params) + len(resid_params) + len(x0_params))
-        # Scale LR ∝ 1/√dmodel (tuned at 768 dim)
-        dmodel_lr_scale = (model_dim / 768) ** -0.5
-        print(f"Scaling AdamW LRs by 1/sqrt({model_dim}/768) = {dmodel_lr_scale:.6f}")
-        param_groups = [
-            dict(kind='adamw', params=lm_head_params, lr=unembedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=embedding_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=value_embeds_params, lr=embedding_lr * dmodel_lr_scale, betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=resid_params, lr=scalar_lr * 0.01, betas=adam_betas, eps=1e-10, weight_decay=0.0),
-            dict(kind='adamw', params=x0_params, lr=scalar_lr, betas=(0.96, 0.95), eps=1e-10, weight_decay=0.0),
-        ]
-        for shape in sorted({p.shape for p in matrix_params}):
-            group_params = [p for p in matrix_params if p.shape == shape]
-            param_groups.append(dict(
-                kind='muon', params=group_params, lr=matrix_lr,
-                momentum=0.95, ns_steps=5, beta2=0.95, weight_decay=weight_decay,
-            ))
-        optimizer = MuonAdamW(param_groups)
-        for group in optimizer.param_groups:
-            group["initial_lr"] = group["lr"]
-        return optimizer
+        if return_hist_maps:
+            sh_aligned = self.scale_shift(pred_sh)
+            energy_recon_aligned = self.reconstruct_from_coeffs(sh_aligned)
+            depth_sh_coeffs = self.project_depth_to_sh(pred_depth)
+            depth_sh = self.reconstruct_from_coeffs(depth_sh_coeffs)
+            out["energy_recon_aligned"] = energy_recon_aligned
+            out["depth_sh"] = depth_sh
+            out["depth_sh_coeffs"] = depth_sh_coeffs
+            out["sh_aligned"] = sh_aligned
 
-    def forward(self, idx, targets=None, reduction='mean'):
-        B, T = idx.size()
-        assert T <= self.cos.size(1)
-        cos_sin = self.cos[:, :T], self.sin[:, :T]
-
-        x = self.transformer.wte(idx)
-        x = norm(x)
-        x0 = x
-        for i, block in enumerate(self.transformer.h):
-            x = self.resid_lambdas[i] * x + self.x0_lambdas[i] * x0
-            ve = self.value_embeds[str(i)](idx) if str(i) in self.value_embeds else None
-            x = block(x, ve, cos_sin, self.window_sizes[i])
-        x = norm(x)
-
-        softcap = 15
-        logits = self.lm_head(x)
-        logits = logits.float()
-        logits = softcap * torch.tanh(logits / softcap)
-
-        if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1),
-                                   ignore_index=-1, reduction=reduction)
-            return loss
-        return logits
-
-# ---------------------------------------------------------------------------
-# Optimizer (MuonAdamW, single GPU only)
-# ---------------------------------------------------------------------------
-
-polar_express_coeffs = [
-    (8.156554524902461, -22.48329292557795, 15.878769915207462),
-    (4.042929935166739, -2.808917465908714, 0.5000178451051316),
-    (3.8916678022926607, -2.772484153217685, 0.5060648178503393),
-    (3.285753657755655, -2.3681294933425376, 0.46449024233003106),
-    (2.3465413258596377, -1.7097828382687081, 0.42323551169305323),
-]
-
-@torch.compile(dynamic=False, fullgraph=True)
-def adamw_step_fused(p, grad, exp_avg, exp_avg_sq, step_t, lr_t, beta1_t, beta2_t, eps_t, wd_t):
-    p.mul_(1 - lr_t * wd_t)
-    exp_avg.lerp_(grad, 1 - beta1_t)
-    exp_avg_sq.lerp_(grad.square(), 1 - beta2_t)
-    bias1 = 1 - beta1_t ** step_t
-    bias2 = 1 - beta2_t ** step_t
-    denom = (exp_avg_sq / bias2).sqrt() + eps_t
-    step_size = lr_t / bias1
-    p.add_(exp_avg / denom, alpha=-step_size)
-
-@torch.compile(dynamic=False, fullgraph=True)
-def muon_step_fused(stacked_grads, stacked_params, momentum_buffer, second_momentum_buffer,
-                    momentum_t, lr_t, wd_t, beta2_t, ns_steps, red_dim):
-    # Nesterov momentum
-    momentum = momentum_t.to(stacked_grads.dtype)
-    momentum_buffer.lerp_(stacked_grads, 1 - momentum)
-    g = stacked_grads.lerp_(momentum_buffer, momentum)
-    # Polar express orthogonalization
-    X = g.bfloat16()
-    X = X / (X.norm(dim=(-2, -1), keepdim=True) * 1.02 + 1e-6)
-    if g.size(-2) > g.size(-1):
-        for a, b, c in polar_express_coeffs[:ns_steps]:
-            A = X.mT @ X
-            B = b * A + c * (A @ A)
-            X = a * X + X @ B
-    else:
-        for a, b, c in polar_express_coeffs[:ns_steps]:
-            A = X @ X.mT
-            B = b * A + c * (A @ A)
-            X = a * X + B @ X
-    g = X
-    # NorMuon variance reduction
-    beta2 = beta2_t.to(g.dtype)
-    v_mean = g.float().square().mean(dim=red_dim, keepdim=True)
-    red_dim_size = g.size(red_dim)
-    v_norm_sq = v_mean.sum(dim=(-2, -1), keepdim=True) * red_dim_size
-    v_norm = v_norm_sq.sqrt()
-    second_momentum_buffer.lerp_(v_mean.to(dtype=second_momentum_buffer.dtype), 1 - beta2)
-    step_size = second_momentum_buffer.clamp_min(1e-10).rsqrt()
-    scaled_sq_sum = (v_mean * red_dim_size) * step_size.float().square()
-    v_norm_new = scaled_sq_sum.sum(dim=(-2, -1), keepdim=True).sqrt()
-    final_scale = step_size * (v_norm / v_norm_new.clamp_min(1e-10))
-    g = g * final_scale.to(g.dtype)
-    # Cautious weight decay + parameter update
-    lr = lr_t.to(g.dtype)
-    wd = wd_t.to(g.dtype)
-    mask = (g * stacked_params) >= 0
-    stacked_params.sub_(lr * g + lr * wd * stacked_params * mask)
+        return out
 
 
-class MuonAdamW(torch.optim.Optimizer):
-    """Combined optimizer: Muon for 2D matrix params, AdamW for others."""
+# ============================================================
+# Dataset
+# ============================================================
 
-    def __init__(self, param_groups):
-        super().__init__(param_groups, defaults={})
-        # 0-D CPU tensors to avoid torch.compile recompilation when values change
-        self._adamw_step_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_lr_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_beta1_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_beta2_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_eps_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._adamw_wd_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._muon_momentum_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._muon_lr_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._muon_wd_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
-        self._muon_beta2_t = torch.tensor(0.0, dtype=torch.float32, device="cpu")
+def get_scene_split(dataset_dir, split_ratio, seed=42):
+    scenes = sorted([
+        d for d in os.listdir(dataset_dir)
+        if os.path.isdir(os.path.join(dataset_dir, d))
+    ])
+    rng = np.random.RandomState(seed)
+    rng.shuffle(scenes)
+    n = len(scenes)
+    n_train = int(n * split_ratio[0])
+    n_val = int(n * split_ratio[1])
+    split = {
+        'train': sorted(scenes[:n_train]),
+        'val': sorted(scenes[n_train:n_train + n_val]),
+        'test': sorted(scenes[n_train + n_val:]),
+    }
+    print(f"Scene split — train: {len(split['train'])}, "
+          f"val: {len(split['val'])}, test: {len(split['test'])}")
+    return split
 
-    def _step_adamw(self, group):
-        for p in group['params']:
-            if p.grad is None:
+
+class SoundSpacesDataset(Dataset):
+    """Sound-Spaces dataset: binaural echoes -> ERP depth."""
+
+    def __init__(self, cfg, split='train'):
+        self.cfg = cfg
+        self.root_dir = cfg.dataset.dataset_dir
+        self.audio_format = cfg.dataset.audio_format
+        self.depth_type = cfg.dataset.depth_type
+        self.max_depth = cfg.dataset.max_depth
+        self.min_depth = cfg.dataset.min_depth
+        self.use_ambisonic = getattr(cfg.dataset, 'use_ambisonic', False)
+
+        scene_split = get_scene_split(
+            self.root_dir, cfg.dataset.split_ratio, seed=cfg.dataset.split_seed)
+        self.scenes = scene_split[split]
+
+        self.samples = []
+        skipped = 0
+        for scene in self.scenes:
+            audio_dir = os.path.join(self.root_dir, scene, 'audio_wav')
+            depth_dir = os.path.join(self.root_dir, scene, f'{self.depth_type}_depth')
+            if not os.path.isdir(audio_dir) or not os.path.isdir(depth_dir):
                 continue
-            grad = p.grad
-            state = self.state[p]
-            if not state:
-                state['step'] = 0
-                state['exp_avg'] = torch.zeros_like(p)
-                state['exp_avg_sq'] = torch.zeros_like(p)
-            state['step'] += 1
-            self._adamw_step_t.fill_(state['step'])
-            self._adamw_lr_t.fill_(group['lr'])
-            self._adamw_beta1_t.fill_(group['betas'][0])
-            self._adamw_beta2_t.fill_(group['betas'][1])
-            self._adamw_eps_t.fill_(group['eps'])
-            self._adamw_wd_t.fill_(group['weight_decay'])
-            adamw_step_fused(p, grad, state['exp_avg'], state['exp_avg_sq'],
-                            self._adamw_step_t, self._adamw_lr_t, self._adamw_beta1_t,
-                            self._adamw_beta2_t, self._adamw_eps_t, self._adamw_wd_t)
+            if self.use_ambisonic:
+                ambi_dir = os.path.join(self.root_dir, scene, 'ambi1_npy')
+                if not os.path.isdir(ambi_dir):
+                    continue
 
-    def _step_muon(self, group):
-        params = group['params']
-        if not params:
-            return
-        p = params[0]
-        state = self.state[p]
-        num_params = len(params)
-        shape, device, dtype = p.shape, p.device, p.dtype
-        if "momentum_buffer" not in state:
-            state["momentum_buffer"] = torch.zeros(num_params, *shape, dtype=dtype, device=device)
-        if "second_momentum_buffer" not in state:
-            state_shape = (num_params, shape[-2], 1) if shape[-2] >= shape[-1] else (num_params, 1, shape[-1])
-            state["second_momentum_buffer"] = torch.zeros(state_shape, dtype=dtype, device=device)
-        red_dim = -1 if shape[-2] >= shape[-1] else -2
-        stacked_grads = torch.stack([p.grad for p in params])
-        stacked_params = torch.stack(params)
-        self._muon_momentum_t.fill_(group["momentum"])
-        self._muon_beta2_t.fill_(group["beta2"] if group["beta2"] is not None else 0.0)
-        self._muon_lr_t.fill_(group["lr"] * max(1.0, shape[-2] / shape[-1])**0.5)
-        self._muon_wd_t.fill_(group["weight_decay"])
-        muon_step_fused(stacked_grads, stacked_params,
-                        state["momentum_buffer"], state["second_momentum_buffer"],
-                        self._muon_momentum_t, self._muon_lr_t, self._muon_wd_t,
-                        self._muon_beta2_t, group["ns_steps"], red_dim)
-        torch._foreach_copy_(params, list(stacked_params.unbind(0)))
+            audio_files = sorted([f for f in os.listdir(audio_dir) if f.endswith('.wav')])
+            for af in audio_files:
+                idx = af.replace('audio_', '').replace('.wav', '')
+                depth_file = f'{self.depth_type}_depth_{idx}.npy'
+                depth_path = os.path.join(depth_dir, depth_file)
+                if not os.path.exists(depth_path):
+                    continue
+                if self.use_ambisonic:
+                    ambi_path = os.path.join(self.root_dir, scene, 'ambi1_npy', f'ambi1_{idx}.npy')
+                    if not os.path.exists(ambi_path):
+                        continue
+                depth = np.load(depth_path).astype(np.float32)
+                if np.mean(depth <= 0) > 0.1:
+                    skipped += 1
+                    continue
+                self.samples.append((scene, idx))
 
-    @torch.no_grad()
-    def step(self):
-        for group in self.param_groups:
-            if group['kind'] == 'adamw':
-                self._step_adamw(group)
-            elif group['kind'] == 'muon':
-                self._step_muon(group)
+        print(f"[{split}] {len(self.samples)} samples from {len(self.scenes)} scenes "
+              f"(filtered {skipped} with >10% no-depth)"
+              f"{' [ambisonic=ON]' if self.use_ambisonic else ''}")
 
-# ---------------------------------------------------------------------------
-# Hyperparameters (edit these directly, no CLI flags needed)
-# ---------------------------------------------------------------------------
+        if self.use_ambisonic:
+            h, w = cfg.dataset.images_size
+            h, w = int(h), int(w)
+            jj, ii = np.meshgrid(np.arange(w), np.arange(h))
+            az_grid = (jj + 0.5) / w * 2 * np.pi - np.pi
+            el_grid = np.pi / 2 - (ii + 0.5) / h * np.pi
+            self._sh_basis = sh_basis_matrix(1, el_grid, az_grid)
+            self._erp_shape = (h, w)
+            self._sh_n_ch = 4
+            print(f"  Precomputed SH basis matrix: {self._sh_basis.shape} (order=1)")
 
-# Model architecture
-ASPECT_RATIO = 64       # model_dim = depth * ASPECT_RATIO
-HEAD_DIM = 128          # target head dimension for attention
-WINDOW_PATTERN = "SSSL" # sliding window pattern: L=full, S=half context
+    def __len__(self):
+        return len(self.samples)
 
-# Optimization
-TOTAL_BATCH_SIZE = 2**19 # ~524K tokens per optimizer step
-EMBEDDING_LR = 0.6      # learning rate for token embeddings (Adam)
-UNEMBEDDING_LR = 0.004  # learning rate for lm_head (Adam)
-MATRIX_LR = 0.04        # learning rate for matrix parameters (Muon)
-SCALAR_LR = 0.5         # learning rate for per-layer scalars (Adam)
-WEIGHT_DECAY = 0.2      # cautious weight decay for Muon
-ADAM_BETAS = (0.8, 0.95) # Adam beta1, beta2
-WARMUP_RATIO = 0.0      # fraction of time budget for LR warmup
-WARMDOWN_RATIO = 0.5    # fraction of time budget for LR warmdown
-FINAL_LR_FRAC = 0.0     # final LR as fraction of initial
+    def __getitem__(self, idx):
+        scene, sample_idx = self.samples[idx]
 
-# Model size
-DEPTH = 8               # number of transformer layers
-DEVICE_BATCH_SIZE = 128  # per-device batch size (reduce if OOM)
+        # Load binaural audio
+        audio_path = os.path.join(self.root_dir, scene, 'audio_wav', f'audio_{sample_idx}.wav')
+        waveform, sr = torchaudio.load(audio_path)
+        waveform = waveform.clone()
 
-# ---------------------------------------------------------------------------
-# Setup: tokenizer, model, optimizer, dataloader
-# ---------------------------------------------------------------------------
+        n_fft, hop_length, win_length = 512, 160, 400
+        cut = int((2 * 20.0 / 340) * sr)
+        waveform = waveform[:, :cut]
 
-t_start = time.time()
-torch.manual_seed(42)
-torch.cuda.manual_seed(42)
-torch.set_float32_matmul_precision("high")
-device = torch.device("cuda")
-autocast_ctx = torch.amp.autocast(device_type="cuda", dtype=torch.bfloat16)
-H100_BF16_PEAK_FLOPS = 989.5e12
+        if 'spectrogram' in self.audio_format:
+            audio = self._get_spectrogram(waveform, n_fft=n_fft, power=1.0,
+                                          win_length=win_length, hop_length=hop_length)
+            images_size = self.cfg.dataset.images_size
+            target_size = tuple(int(x) for x in images_size)
+            audio = F.interpolate(audio.unsqueeze(0), size=target_size, mode='nearest').squeeze(0)
+        else:
+            audio = waveform
 
-tokenizer = Tokenizer.from_directory()
-vocab_size = tokenizer.get_vocab_size()
-print(f"Vocab size: {vocab_size:,}")
+        # Load ERP depth
+        depth_path = os.path.join(
+            self.root_dir, scene, f'{self.depth_type}_depth',
+            f'{self.depth_type}_depth_{sample_idx}.npy')
+        depth = np.load(depth_path).astype(np.float32)
+        depth = np.nan_to_num(depth)
+        depth[depth == -np.inf] = 0
+        depth[depth == np.inf] = 0
+        depth[depth < 0.0] = 0.0
+        depth[depth > self.max_depth] = self.max_depth
+        gt_depth = torch.from_numpy(depth).unsqueeze(0)
 
-def build_model_config(depth):
-    base_dim = depth * ASPECT_RATIO
-    model_dim = ((base_dim + HEAD_DIM - 1) // HEAD_DIM) * HEAD_DIM
-    num_heads = model_dim // HEAD_DIM
-    return GPTConfig(
-        sequence_len=MAX_SEQ_LEN, vocab_size=vocab_size,
-        n_layer=depth, n_head=num_heads, n_kv_head=num_heads, n_embd=model_dim,
-        window_pattern=WINDOW_PATTERN,
+        if 'resize' in self.cfg.dataset.preprocess:
+            h, w = self.cfg.dataset.images_size
+            gt_depth = F.interpolate(gt_depth.unsqueeze(0), size=(int(h), int(w)),
+                                     mode='nearest').squeeze(0)
+        if self.cfg.dataset.depth_norm:
+            gt_depth = gt_depth / self.max_depth
+
+        if self.use_ambisonic:
+            ambi_path = os.path.join(
+                self.root_dir, scene, 'ambi1_npy', f'ambi1_{sample_idx}.npy')
+            sh_coeffs = np.load(ambi_path).astype(np.float64)
+            h, w = self._erp_shape
+            component_maps = reconstruct_per_component_maps(sh_coeffs, self._sh_basis)
+            component_maps = component_maps.reshape(4, h, w).astype(np.float32)
+            for ch in range(4):
+                cmax = np.abs(component_maps[ch]).max()
+                if cmax > 0:
+                    component_maps[ch] = component_maps[ch] / cmax
+            ambi_erp = torch.from_numpy(component_maps)
+            return audio.contiguous(), gt_depth.contiguous(), ambi_erp.contiguous()
+
+        return audio.contiguous(), gt_depth.contiguous()
+
+    def _get_spectrogram(self, waveform, n_fft=512, power=1.0, win_length=64, hop_length=16):
+        spectrogram = T.Spectrogram(n_fft=n_fft, win_length=win_length,
+                                    power=power, hop_length=hop_length)
+        return spectrogram(waveform)
+
+
+# ============================================================
+# Loss functions
+# ============================================================
+
+class SILogLoss(nn.Module):
+    def __init__(self, variance_weight=0.5):
+        super().__init__()
+        self.variance_weight = variance_weight
+
+    def forward(self, pred, gt):
+        mask = gt > 0
+        pred, gt = pred[mask], gt[mask]
+        if pred.numel() == 0:
+            return torch.tensor(0.0, device=pred.device)
+        log_diff = torch.log(pred + 1e-6) - torch.log(gt + 1e-6)
+        return torch.mean(log_diff ** 2) - self.variance_weight * (torch.mean(log_diff) ** 2)
+
+
+class GradientLoss(nn.Module):
+    def forward(self, pred, gt):
+        mask = (gt > 0).float()
+        pred_dx = pred[:, :, :, :-1] - pred[:, :, :, 1:]
+        pred_dy = pred[:, :, :-1, :] - pred[:, :, 1:, :]
+        gt_dx = gt[:, :, :, :-1] - gt[:, :, :, 1:]
+        gt_dy = gt[:, :, :-1, :] - gt[:, :, 1:, :]
+        mask_dx = mask[:, :, :, :-1] * mask[:, :, :, 1:]
+        mask_dy = mask[:, :, :-1, :] * mask[:, :, 1:, :]
+        loss_dx = torch.abs(pred_dx - gt_dx) * mask_dx
+        loss_dy = torch.abs(pred_dy - gt_dy) * mask_dy
+        return loss_dx.sum() / mask_dx.sum().clamp(min=1) + loss_dy.sum() / mask_dy.sum().clamp(min=1)
+
+
+class BerHuLoss(nn.Module):
+    def forward(self, pred, gt):
+        mask = gt > 0
+        pred, gt = pred[mask], gt[mask]
+        if pred.numel() == 0:
+            return torch.tensor(0.0, device=pred.device)
+        diff = torch.abs(pred - gt)
+        c = 0.2 * diff.max().detach()
+        l1 = diff[diff <= c]
+        l2 = diff[diff > c]
+        return (l1.sum() + ((l2 ** 2 + c ** 2) / (2 * c)).sum()) / pred.numel()
+
+
+class SSIMLoss(nn.Module):
+    def __init__(self, window_size=11):
+        super().__init__()
+        self.window_size = window_size
+
+    def forward(self, pred, gt):
+        mask = (gt > 0).float()
+        pred, gt = pred * mask, gt * mask
+        C1, C2 = 0.01 ** 2, 0.03 ** 2
+        pad = self.window_size // 2
+        mu_pred = F.avg_pool2d(pred, self.window_size, 1, pad)
+        mu_gt = F.avg_pool2d(gt, self.window_size, 1, pad)
+        sigma_pred = F.avg_pool2d(pred ** 2, self.window_size, 1, pad) - mu_pred ** 2
+        sigma_gt = F.avg_pool2d(gt ** 2, self.window_size, 1, pad) - mu_gt ** 2
+        sigma_pg = F.avg_pool2d(pred * gt, self.window_size, 1, pad) - mu_pred * mu_gt
+        ssim = ((2 * mu_pred * mu_gt + C1) * (2 * sigma_pg + C2)) / \
+               ((mu_pred ** 2 + mu_gt ** 2 + C1) * (sigma_pred + sigma_gt + C2))
+        mask_pooled = F.avg_pool2d(mask, self.window_size, 1, pad)
+        valid = mask_pooled > 0.5
+        if valid.sum() == 0:
+            return torch.tensor(0.0, device=pred.device)
+        return (1 - ssim[valid]).mean()
+
+
+class DepthLoss(nn.Module):
+    def __init__(self, use_l1=True, use_silog=False, use_gradient=False,
+                 use_berhu=False, use_ssim=False,
+                 w_l1=1.0, w_silog=0.5, w_gradient=0.5, w_berhu=1.0, w_ssim=0.5):
+        super().__init__()
+        self.use_l1 = use_l1
+        self.use_silog = use_silog
+        self.use_gradient = use_gradient
+        self.use_berhu = use_berhu
+        self.use_ssim = use_ssim
+        if use_l1:       self.l1 = nn.L1Loss();        self.w_l1 = w_l1
+        if use_silog:    self.silog = SILogLoss();      self.w_silog = w_silog
+        if use_gradient: self.gradient = GradientLoss(); self.w_gradient = w_gradient
+        if use_berhu:    self.berhu = BerHuLoss();      self.w_berhu = w_berhu
+        if use_ssim:     self.ssim_loss = SSIMLoss();    self.w_ssim = w_ssim
+
+    def forward(self, pred, gt):
+        mask = gt > 0
+        loss = torch.tensor(0.0, device=pred.device)
+        if self.use_l1:       loss = loss + self.w_l1 * self.l1(pred[mask], gt[mask])
+        if self.use_silog:    loss = loss + self.w_silog * self.silog(pred, gt)
+        if self.use_gradient: loss = loss + self.w_gradient * self.gradient(pred, gt)
+        if self.use_berhu:    loss = loss + self.w_berhu * self.berhu(pred, gt)
+        if self.use_ssim:     loss = loss + self.w_ssim * self.ssim_loss(pred, gt)
+        return loss
+
+
+class FOAGuidedLoss(nn.Module):
+    def __init__(self, use_cosine=True, cosine_weight=0.1):
+        super().__init__()
+        self.use_cosine = use_cosine
+        self.cosine_weight = cosine_weight
+
+    def forward(self, pred_foa, gt_foa):
+        l1 = F.l1_loss(pred_foa, gt_foa)
+        if self.use_cosine:
+            cos = 1.0 - F.cosine_similarity(pred_foa, gt_foa, dim=-1).mean()
+            return l1 + self.cosine_weight * cos
+        return l1
+
+
+class SH5HistogramAlignmentLoss(nn.Module):
+    def __init__(self, map_cosine_weight=0.5, coeff_cosine_weight=0.2):
+        super().__init__()
+        self.map_cosine_weight = map_cosine_weight
+        self.coeff_cosine_weight = coeff_cosine_weight
+
+    def _normalize_map(self, x, eps=1e-6):
+        B = x.shape[0]
+        x_flat = x.view(B, -1)
+        x_min = x_flat.min(dim=1, keepdim=True).values
+        x_max = x_flat.max(dim=1, keepdim=True).values
+        return ((x_flat - x_min) / (x_max - x_min + eps)).view_as(x)
+
+    def forward(self, energy_recon_aligned, depth_sh,
+                sh_aligned=None, depth_sh_coeffs=None):
+        e_norm = self._normalize_map(energy_recon_aligned)
+        d_norm = self._normalize_map(depth_sh)
+        loss = F.l1_loss(e_norm, d_norm)
+
+        B = e_norm.shape[0]
+        e_flat = e_norm.view(B, -1)
+        d_flat = d_norm.view(B, -1)
+        loss = loss + self.map_cosine_weight * (1.0 - F.cosine_similarity(e_flat, d_flat, dim=-1).mean())
+
+        if sh_aligned is not None and depth_sh_coeffs is not None:
+            loss = loss + self.coeff_cosine_weight * (
+                1.0 - F.cosine_similarity(sh_aligned, depth_sh_coeffs, dim=-1).mean())
+        return loss
+
+
+class AudioDepthFOAV2Loss(nn.Module):
+    def __init__(self, depth_criterion, foa_criterion=None,
+                 depth_weight=1.0, foa_weight=0.1,
+                 hist_criterion=None, hist_weight=0.1, latent_reg_weight=0.0):
+        super().__init__()
+        self.depth_criterion = depth_criterion
+        self.foa_criterion = foa_criterion if foa_criterion is not None else FOAGuidedLoss()
+        self.hist_criterion = hist_criterion
+        self.depth_weight = depth_weight
+        self.foa_weight = foa_weight
+        self.hist_weight = hist_weight
+        self.latent_reg_weight = latent_reg_weight
+
+    def forward(self, outputs, gt_depth, gt_foa,
+                gt_depth_sh=None, gt_depth_sh_coeffs=None):
+        pred_depth = outputs["pred_depth"]
+        pred_foa = outputs["pred_foa"]
+        foa_latent = outputs["foa_latent"]
+
+        depth_loss = self.depth_criterion(pred_depth, gt_depth)
+        foa_loss = self.foa_criterion(pred_foa, gt_foa)
+
+        ambi_guide_loss = torch.tensor(0.0, device=pred_depth.device)
+        depth_follow_loss = torch.tensor(0.0, device=pred_depth.device)
+        hist_loss = torch.tensor(0.0, device=pred_depth.device)
+
+        if (self.hist_criterion is not None and self.hist_weight > 0
+                and "energy_recon_aligned" in outputs):
+            energy_recon = outputs["energy_recon_aligned"]
+            depth_sh = outputs["depth_sh"]
+            sh_aligned = outputs.get("sh_aligned")
+            depth_sh_coeffs = outputs.get("depth_sh_coeffs")
+
+            if gt_depth_sh is not None:
+                ambi_guide_loss = self.hist_criterion(
+                    energy_recon, gt_depth_sh, sh_aligned, gt_depth_sh_coeffs)
+                depth_follow_loss = self.hist_criterion(
+                    energy_recon.detach(), depth_sh,
+                    sh_aligned.detach() if sh_aligned is not None else None,
+                    depth_sh_coeffs)
+                hist_loss = ambi_guide_loss + depth_follow_loss
+            else:
+                hist_loss = self.hist_criterion(energy_recon, depth_sh, sh_aligned, depth_sh_coeffs)
+
+        latent_reg = torch.tensor(0.0, device=pred_depth.device)
+        if self.latent_reg_weight > 0:
+            latent_reg = (foa_latent ** 2).mean()
+
+        total = (self.depth_weight * depth_loss
+                 + self.foa_weight * foa_loss
+                 + self.hist_weight * hist_loss
+                 + self.latent_reg_weight * latent_reg)
+
+        return {
+            "total": total, "depth": depth_loss, "foa": foa_loss,
+            "hist_align": hist_loss, "ambi_guide": ambi_guide_loss,
+            "depth_follow": depth_follow_loss, "latent_reg": latent_reg,
+        }
+
+
+# ============================================================
+# Metrics & Utilities
+# ============================================================
+
+def compute_errors(gt, pred):
+    """Depth error metrics between predicted and ground truth."""
+    mask = gt > 0
+    pred, gt = pred[mask], gt[mask]
+    if len(pred) == 0:
+        return 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
+
+    thresh = np.maximum((gt / pred), (pred / gt))
+    a1 = (thresh < 1.25).mean()
+    a2 = (thresh < 1.25 ** 2).mean()
+    a3 = (thresh < 1.25 ** 3).mean()
+    rmse = np.sqrt(((gt - pred) ** 2).mean())
+    abs_rel = np.mean(np.abs(gt - pred) / gt)
+    log_10 = np.abs(np.log10(gt + 1e-8) - np.log10(pred + 1e-8)).mean()
+    mae = np.abs(gt - pred).mean()
+
+    for v in [rmse, a1, a2, a3, abs_rel, log_10, mae]:
+        if v != v:
+            v = 0.0
+    return abs_rel, rmse, a1, a2, a3, log_10, mae
+
+
+def compute_foa_errors(gt_foa, pred_foa):
+    """FOA evaluation metrics (guided channels only)."""
+    foa_l1 = np.abs(gt_foa - pred_foa).mean()
+    dot = np.dot(gt_foa, pred_foa)
+    foa_cosine = dot / (np.linalg.norm(gt_foa) + 1e-8) / (np.linalg.norm(pred_foa) + 1e-8)
+    gt_dir, pred_dir = gt_foa[1:], pred_foa[1:]
+    foa_dir_cosine = np.dot(gt_dir, pred_dir) / (np.linalg.norm(gt_dir) + 1e-8) / (np.linalg.norm(pred_dir) + 1e-8)
+    return {'foa_l1': float(foa_l1), 'foa_cosine': float(foa_cosine), 'foa_dir_cosine': float(foa_dir_cosine)}
+
+
+def extract_foa_target_from_energy_map(energy_map):
+    """Extract (B, 4) FOA target from (B, 4, H, W) energy maps."""
+    return energy_map.mean(dim=(2, 3))
+
+
+def get_base_model(model):
+    if isinstance(model, nn.DataParallel):
+        return model.module
+    return model
+
+
+def compute_gt_depth_sh(model, gt_depth):
+    base = get_base_model(model)
+    with torch.no_grad():
+        coeffs = base.project_depth_to_sh(gt_depth)
+        sh_map = base.reconstruct_from_coeffs(coeffs)
+    return sh_map, coeffs
+
+
+def load_gt_rgb(dataset_dir, scene, sample_idx, depth_type, h=256, w=512):
+    if depth_type == 'erp':
+        rgb_path = os.path.join(dataset_dir, scene, 'erp_rgb', f'erp_{sample_idx}.png')
+    else:
+        rgb_path = os.path.join(dataset_dir, scene, 'pinhole_rgb', f'pinhole_{sample_idx}.png')
+    if os.path.exists(rgb_path):
+        img = Image.open(rgb_path).convert('RGB').resize((w, h), Image.BILINEAR)
+        return np.array(img, dtype=np.float32) / 255.0
+    return None
+
+
+# ============================================================
+# Visualization
+# ============================================================
+
+def save_visualizations(vis_data, epoch, vis_dir, max_depth):
+    """Save 5-panel PNGs: GT RGB | GT Depth | Pred Depth | Spectrogram | FOA."""
+    epoch_dir = os.path.join(vis_dir, f'epoch_{epoch:03d}')
+    os.makedirs(epoch_dir, exist_ok=True)
+
+    for i, item in enumerate(vis_data):
+        fig, axes = plt.subplots(1, 5, figsize=(25, 5))
+
+        gt_rgb = item['gt_rgb']
+        if gt_rgb is not None:
+            disp = (gt_rgb * 255).astype(np.uint8) if gt_rgb.max() <= 1.0 and gt_rgb.max() > 0 else gt_rgb
+            axes[0].imshow(disp)
+        else:
+            axes[0].text(0.5, 0.5, 'No RGB', ha='center', va='center', transform=axes[0].transAxes)
+        axes[0].set_title('GT RGB'); axes[0].axis('off')
+
+        gt_d = item['gt_depth']
+        if gt_d.ndim == 3 and gt_d.shape[0] == 1:
+            gt_d = gt_d[0]
+        im1 = axes[1].imshow(np.ma.masked_where(gt_d <= 0, gt_d), cmap='plasma', vmin=0, vmax=max_depth)
+        axes[1].set_title('GT Depth'); axes[1].axis('off')
+        plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+
+        pred_d = item['pred_depth']
+        if pred_d.ndim == 3 and pred_d.shape[0] == 1:
+            pred_d = pred_d[0]
+        im2 = axes[2].imshow(pred_d, cmap='plasma', vmin=0, vmax=max_depth)
+        axes[2].set_title('Pred Depth'); axes[2].axis('off')
+        plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
+
+        inp = item['input']
+        spec = np.log10(inp.mean(axis=0) + 1e-10) if inp.ndim == 3 and inp.shape[0] == 2 else np.log10(inp + 1e-10)
+        axes[3].imshow(spec, cmap='magma', aspect='auto', origin='lower')
+        axes[3].set_title('Spectrogram'); axes[3].axis('off')
+
+        gt_foa = item.get('gt_foa')
+        pred_foa = item.get('pred_foa')
+        if gt_foa is not None and pred_foa is not None:
+            x_pos = np.arange(4)
+            axes[4].bar(x_pos - 0.15, gt_foa, 0.3, label='GT', alpha=0.8)
+            axes[4].bar(x_pos + 0.15, pred_foa, 0.3, label='Pred', alpha=0.8)
+            axes[4].set_xticks(x_pos); axes[4].set_xticklabels(['W', 'Y', 'Z', 'X'])
+            axes[4].legend(); axes[4].set_title('FOA Coeffs')
+        else:
+            axes[4].axis('off')
+
+        plt.tight_layout()
+        plt.savefig(os.path.join(epoch_dir, f'sample_{i:04d}.png'), dpi=150, bbox_inches='tight')
+        plt.close()
+
+
+# ============================================================
+# Model builder
+# ============================================================
+
+def build_model(cfg):
+    num_downs = 7 if cfg.model.generator == 'unet_128' else 8
+    return AudioDepthFOAV2Generator(
+        cfg, input_nc=2, output_nc=1, num_downs=num_downs, ngf=64,
+        use_dropout=False,
+        proj_dim=cfg.model.proj_dim,
+        foa_dim=cfg.model.foa_dim,
+        sh_order=cfg.model.sh_order,
+        scale_shift_hidden=cfg.model.scale_shift_hidden,
+        scale_shift_layers=cfg.model.scale_shift_layers,
+        H_erp=int(cfg.dataset.images_size[0]),
+        W_erp=int(cfg.dataset.images_size[1]),
     )
 
-config = build_model_config(DEPTH)
-print(f"Model config: {asdict(config)}")
 
-with torch.device("meta"):
-    model = GPT(config)
-model.to_empty(device=device)
-model.init_weights()
+def build_criterion(cfg, device):
+    depth_criterion = DepthLoss(
+        use_l1=cfg.mode.use_l1, use_silog=cfg.mode.use_silog,
+        use_gradient=cfg.mode.use_gradient, use_berhu=cfg.mode.use_berhu,
+        use_ssim=cfg.mode.use_ssim,
+        w_l1=cfg.mode.w_l1, w_silog=cfg.mode.w_silog,
+        w_gradient=cfg.mode.w_gradient, w_berhu=cfg.mode.w_berhu,
+        w_ssim=cfg.mode.w_ssim,
+    ).to(device)
 
-param_counts = model.num_scaling_params()
-print("Parameter counts:")
-for key, value in param_counts.items():
-    print(f"  {key:24s}: {value:,}")
-num_params = param_counts['total']
-num_flops_per_token = model.estimate_flops()
-print(f"Estimated FLOPs per token: {num_flops_per_token:e}")
+    foa_criterion = FOAGuidedLoss(
+        use_cosine=cfg.model.foa_use_cosine,
+        cosine_weight=cfg.model.foa_cosine_weight,
+    ).to(device)
 
-tokens_per_fwdbwd = DEVICE_BATCH_SIZE * MAX_SEQ_LEN
-assert TOTAL_BATCH_SIZE % tokens_per_fwdbwd == 0
-grad_accum_steps = TOTAL_BATCH_SIZE // tokens_per_fwdbwd
+    hist_weight = cfg.model.hist_weight
+    hist_criterion = None
+    if hist_weight > 0:
+        hist_criterion = SH5HistogramAlignmentLoss().to(device)
 
-optimizer = model.setup_optimizer(
-    unembedding_lr=UNEMBEDDING_LR,
-    embedding_lr=EMBEDDING_LR,
-    scalar_lr=SCALAR_LR,
-    adam_betas=ADAM_BETAS,
-    matrix_lr=MATRIX_LR,
-    weight_decay=WEIGHT_DECAY,
-)
+    return AudioDepthFOAV2Loss(
+        depth_criterion=depth_criterion,
+        foa_criterion=foa_criterion,
+        depth_weight=cfg.model.depth_weight,
+        foa_weight=cfg.model.foa_weight,
+        hist_criterion=hist_criterion,
+        hist_weight=hist_weight,
+        latent_reg_weight=cfg.model.latent_reg_weight,
+    ).to(device)
 
-model = torch.compile(model, dynamic=False)
 
-train_loader = make_dataloader(tokenizer, DEVICE_BATCH_SIZE, MAX_SEQ_LEN, "train")
-x, y, epoch = next(train_loader)  # prefetch first batch
+# ============================================================
+# Training
+# ============================================================
 
-print(f"Time budget: {TIME_BUDGET}s")
-print(f"Gradient accumulation steps: {grad_accum_steps}")
+def train(cfg):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    n_GPU = torch.cuda.device_count()
+    print(f"{n_GPU} {device} device(s)")
 
-# Schedules (all based on progress = training_time / TIME_BUDGET)
+    batch_size = cfg.mode.batch_size
+    sh_order = cfg.model.sh_order
+    sh_dim = (sh_order + 1) ** 2
+    print(f"SH order: {sh_order} ({sh_dim} coefficients, 4 guided + {sh_dim - 4} learned)")
 
-def get_lr_multiplier(progress):
-    if progress < WARMUP_RATIO:
-        return progress / WARMUP_RATIO if WARMUP_RATIO > 0 else 1.0
-    elif progress < 1.0 - WARMDOWN_RATIO:
-        return 1.0
+    # Dataset
+    train_set = SoundSpacesDataset(cfg, split='train')
+    val_set = SoundSpacesDataset(cfg, split='val')
+    print(f'Train: {len(train_set)} samples, Val: {len(val_set)} samples')
+
+    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True,
+                              num_workers=cfg.mode.num_threads, pin_memory=True)
+    val_loader = DataLoader(val_set, batch_size=batch_size, shuffle=False,
+                            num_workers=cfg.mode.num_threads, pin_memory=True)
+
+    # Model
+    model = build_model(cfg)
+    if n_GPU > 0:
+        model = model.cuda()
+        model = nn.DataParallel(model, list(range(n_GPU)))
+    total_params = sum(p.numel() for p in model.parameters()) / 1e6
+    print(f'Model: {cfg.model.name} ({total_params:.1f}M params)')
+
+    # Loss & optimizer
+    criterion = build_criterion(cfg, device)
+    use_hist_align = cfg.model.hist_weight > 0
+
+    lr = cfg.mode.learning_rate
+    if cfg.mode.optimizer == 'AdamW':
+        optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    elif cfg.mode.optimizer == 'Adam':
+        optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     else:
-        cooldown = (1.0 - progress) / WARMDOWN_RATIO
-        return cooldown * 1.0 + (1 - cooldown) * FINAL_LR_FRAC
+        optimizer = torch.optim.SGD(model.parameters(), lr=lr)
 
-def get_muon_momentum(step):
-    frac = min(step / 300, 1)
-    return (1 - frac) * 0.85 + frac * 0.95
+    # Output directories
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    experiment_name = (f"{cfg.model.generator}_{cfg.dataset.name}_BS{batch_size}_"
+                       f"Lr{lr}_{cfg.mode.optimizer}_{cfg.mode.experiment_name}")
+    ckpt_dir = os.path.join(project_dir, 'checkpoints', experiment_name)
+    vis_dir = os.path.join(project_dir, 'outputs', experiment_name, 'visualizations')
+    os.makedirs(ckpt_dir, exist_ok=True)
+    os.makedirs(vis_dir, exist_ok=True)
+    print(f'Checkpoints: {ckpt_dir}')
 
-def get_weight_decay(progress):
-    return WEIGHT_DECAY * (1 - progress)
+    # Resume
+    start_epoch = 1
+    if cfg.mode.checkpoints is not None:
+        ckpt_path = os.path.join(ckpt_dir, f'checkpoint_{cfg.mode.checkpoints}.pth')
+        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["state_dict"])
+        start_epoch = ckpt["epoch"] + 1
+        print(f'Resumed from epoch {ckpt["epoch"]}')
 
-# ---------------------------------------------------------------------------
-# Training loop
-# ---------------------------------------------------------------------------
+    # FOA freeze warmup
+    foa_freeze_epochs = cfg.model.foa_freeze_epochs
+    def set_sh_branch_frozen(frozen):
+        base = get_base_model(model)
+        for name in ('audio_proj', 'foa_head', 'hoa_head', 'scale_shift'):
+            module = getattr(base, name, None)
+            if module is not None:
+                for p in module.parameters():
+                    p.requires_grad = not frozen
 
-t_start_training = time.time()
-smooth_train_loss = 0
-total_training_time = 0
-step = 0
+    best_abs_rel = float('inf')
+    n_vis = min(20, len(val_set))
+    vis_indices = set(np.linspace(0, len(val_set) - 1, n_vis, dtype=int).tolist())
 
-while True:
-    torch.cuda.synchronize()
-    t0 = time.time()
-    for micro_step in range(grad_accum_steps):
-        with autocast_ctx:
-            loss = model(x, y)
-        train_loss = loss.detach()
-        loss = loss / grad_accum_steps
-        loss.backward()
-        x, y, epoch = next(train_loader)
+    dataset_dir = cfg.dataset.dataset_dir
+    depth_type = cfg.dataset.depth_type
+    target_h, target_w = int(cfg.dataset.images_size[0]), int(cfg.dataset.images_size[1])
 
-    # Progress and schedules
-    progress = min(total_training_time / TIME_BUDGET, 1.0)
-    lrm = get_lr_multiplier(progress)
-    muon_momentum = get_muon_momentum(step)
-    muon_weight_decay = get_weight_decay(progress)
-    for group in optimizer.param_groups:
-        group["lr"] = group["initial_lr"] * lrm
-        if group['kind'] == 'muon':
-            group["momentum"] = muon_momentum
-            group["weight_decay"] = muon_weight_decay
-    optimizer.step()
-    model.zero_grad(set_to_none=True)
+    for epoch in range(start_epoch, cfg.mode.epochs + 1):
+        foa_frozen = foa_freeze_epochs > 0 and epoch <= foa_freeze_epochs
+        if foa_freeze_epochs > 0:
+            set_sh_branch_frozen(foa_frozen)
+            if epoch == 1:
+                print(f'  [Warmup] SH branch FROZEN for {foa_freeze_epochs} epochs')
+            elif epoch == foa_freeze_epochs + 1:
+                print(f'  [Warmup done] SH branch UNFROZEN')
 
-    train_loss_f = train_loss.item()
+        use_hist = use_hist_align and not foa_frozen
+        t0 = time.time()
+        losses_accum = {'total': [], 'depth': [], 'foa': [], 'hist': []}
 
-    # Fast fail: abort if loss is exploding or NaN
-    if math.isnan(train_loss_f) or train_loss_f > 100:
-        print("FAIL")
-        exit(1)
+        # --- Train ---
+        model.train()
+        for i, (audio, gtdepth, ambi) in enumerate(train_loader):
+            audio, gtdepth, ambi = audio.to(device), gtdepth.to(device), ambi.to(device)
+            gt_foa = extract_foa_target_from_energy_map(ambi)
 
-    torch.cuda.synchronize()
-    t1 = time.time()
-    dt = t1 - t0
+            optimizer.zero_grad()
+            outputs = model(audio, return_hist_maps=use_hist)
 
-    if step > 10:
-        total_training_time += dt
+            gt_depth_sh_map, gt_depth_sh_coeffs = None, None
+            if use_hist:
+                gt_depth_sh_map, gt_depth_sh_coeffs = compute_gt_depth_sh(model, gtdepth)
 
-    # Logging
-    ema_beta = 0.9
-    smooth_train_loss = ema_beta * smooth_train_loss + (1 - ema_beta) * train_loss_f
-    debiased_smooth_loss = smooth_train_loss / (1 - ema_beta**(step + 1))
-    pct_done = 100 * progress
-    tok_per_sec = int(TOTAL_BATCH_SIZE / dt)
-    mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE / dt / H100_BF16_PEAK_FLOPS
-    remaining = max(0, TIME_BUDGET - total_training_time)
+            if foa_frozen:
+                loss = criterion.depth_criterion(outputs["pred_depth"], gtdepth) * criterion.depth_weight
+                losses_accum['total'].append(loss.item())
+                losses_accum['depth'].append(loss.item() / criterion.depth_weight)
+            else:
+                loss_dict = criterion(outputs, gtdepth, gt_foa,
+                                      gt_depth_sh=gt_depth_sh_map,
+                                      gt_depth_sh_coeffs=gt_depth_sh_coeffs)
+                loss = loss_dict["total"]
+                losses_accum['total'].append(loss.item())
+                losses_accum['depth'].append(loss_dict["depth"].item())
+                losses_accum['foa'].append(loss_dict["foa"].item())
+                if use_hist:
+                    losses_accum['hist'].append(loss_dict["hist_align"].item())
 
-    print(f"\rstep {step:05d} ({pct_done:.1f}%) | loss: {debiased_smooth_loss:.6f} | lrm: {lrm:.2f} | dt: {dt*1000:.0f}ms | tok/sec: {tok_per_sec:,} | mfu: {mfu:.1f}% | epoch: {epoch} | remaining: {remaining:.0f}s    ", end="", flush=True)
+            loss.backward()
+            optimizer.step()
 
-    # GC management (Python's GC causes ~500ms stalls)
-    if step == 0:
-        gc.collect()
-        gc.freeze()
-        gc.disable()
-    elif (step + 1) % 5000 == 0:
-        gc.collect()
+            total_batches = len(train_loader)
+            if (i + 1) % max(1, total_batches // 5) == 0 or (i + 1) == total_batches:
+                progress = (i + 1) / total_batches * 100
+                msg = (f'  Epoch {epoch} [{i+1}/{total_batches} {progress:.0f}%] '
+                       f'Loss: {np.mean(losses_accum["total"]):.4f} '
+                       f'D:{np.mean(losses_accum["depth"]):.4f}')
+                if losses_accum['foa']:
+                    msg += f' F:{np.mean(losses_accum["foa"]):.4f}'
+                if losses_accum['hist']:
+                    msg += f' H:{np.mean(losses_accum["hist"]):.4f}'
+                print(msg)
 
-    step += 1
+        epoch_time = time.time() - t0
+        print(f'Epoch [{epoch}/{cfg.mode.epochs}] Loss: {np.mean(losses_accum["total"]):.4f} '
+              f'Time: {epoch_time:.1f}s')
 
-    # Time's up — but only stop after warmup steps so we don't count compilation
-    if step > 10 and total_training_time >= TIME_BUDGET:
-        break
+        # --- Validation ---
+        if epoch % cfg.mode.validation_iter == 0:
+            model.eval()
+            errors = []
+            val_losses = []
+            vis_data = []
+            do_vis = (epoch % 5 == 0)
 
-print()  # newline after \r training log
+            with torch.no_grad():
+                for batch_idx, (audio_v, gtdepth_v, ambi_v) in enumerate(val_loader):
+                    audio_v, gtdepth_v, ambi_v = audio_v.to(device), gtdepth_v.to(device), ambi_v.to(device)
+                    gt_foa_v = extract_foa_target_from_energy_map(ambi_v)
+                    outputs_v = model(audio_v, return_hist_maps=use_hist)
 
-total_tokens = step * TOTAL_BATCH_SIZE
+                    gt_dsh, gt_dsh_c = None, None
+                    if use_hist:
+                        gt_dsh, gt_dsh_c = compute_gt_depth_sh(model, gtdepth_v)
 
-# Final eval
-model.eval()
-with autocast_ctx:
-    val_bpb = evaluate_bpb(model, tokenizer, DEVICE_BATCH_SIZE)
+                    if foa_frozen:
+                        lv = criterion.depth_criterion(outputs_v["pred_depth"], gtdepth_v) * criterion.depth_weight
+                    else:
+                        lv_dict = criterion(outputs_v, gtdepth_v, gt_foa_v, gt_depth_sh=gt_dsh, gt_depth_sh_coeffs=gt_dsh_c)
+                        lv = lv_dict["total"]
+                    val_losses.append(lv.item())
 
-# Final summary
-t_end = time.time()
-startup_time = t_start_training - t_start
-steady_state_mfu = 100 * num_flops_per_token * TOTAL_BATCH_SIZE * (step - 10) / total_training_time / H100_BF16_PEAK_FLOPS if total_training_time > 0 else 0
-peak_vram_mb = torch.cuda.max_memory_allocated() / 1024 / 1024
+                    depth_pred_v = outputs_v["pred_depth"]
+                    pred_foa_v = outputs_v["pred_foa"]
 
-print("---")
-print(f"val_bpb:          {val_bpb:.6f}")
-print(f"training_seconds: {total_training_time:.1f}")
-print(f"total_seconds:    {t_end - t_start:.1f}")
-print(f"peak_vram_mb:     {peak_vram_mb:.1f}")
-print(f"mfu_percent:      {steady_state_mfu:.2f}")
-print(f"total_tokens_M:   {total_tokens / 1e6:.1f}")
-print(f"num_steps:        {step}")
-print(f"num_params_M:     {num_params / 1e6:.1f}")
-print(f"depth:            {DEPTH}")
+                    for idx in range(depth_pred_v.shape[0]):
+                        dataset_idx = batch_idx * batch_size + idx
+                        if dataset_idx >= len(val_set.samples):
+                            break
+                        if cfg.dataset.depth_norm:
+                            ug = gtdepth_v[idx].cpu().numpy() * cfg.dataset.max_depth
+                            up = depth_pred_v[idx].cpu().numpy() * cfg.dataset.max_depth
+                        else:
+                            ug = gtdepth_v[idx].cpu().numpy()
+                            up = depth_pred_v[idx].cpu().numpy()
+                        errors.append(compute_errors(ug, up))
+
+                        if do_vis and dataset_idx in vis_indices:
+                            scene_id, step_idx = val_set.samples[dataset_idx]
+                            gt_rgb = load_gt_rgb(dataset_dir, scene_id, step_idx, depth_type, target_h, target_w)
+                            vis_data.append({
+                                'gt_rgb': gt_rgb, 'gt_depth': ug, 'pred_depth': up,
+                                'input': audio_v[idx].cpu().numpy(),
+                                'gt_foa': gt_foa_v[idx].cpu().numpy(),
+                                'pred_foa': pred_foa_v[idx].cpu().numpy(),
+                            })
+
+            mean_errors = np.array(errors).mean(0)
+            abs_rel = mean_errors[0]
+            print(f'  Val Loss: {np.mean(val_losses):.4f} | '
+                  f'ABS_REL: {abs_rel:.4f} RMSE: {mean_errors[1]:.4f} '
+                  f'd1: {mean_errors[2]:.4f} d2: {mean_errors[3]:.4f} d3: {mean_errors[4]:.4f}')
+
+            if do_vis and vis_data:
+                save_visualizations(vis_data, epoch, vis_dir, cfg.dataset.max_depth)
+                print(f'  Saved {len(vis_data)} visualizations')
+
+            if abs_rel < best_abs_rel:
+                best_abs_rel = abs_rel
+                torch.save({
+                    'epoch': epoch, 'state_dict': model.state_dict(),
+                    'optimizer': optimizer.state_dict(), 'best_abs_rel': best_abs_rel,
+                }, os.path.join(ckpt_dir, 'best_model.pth'))
+                print(f'  >> Best model saved (ABS_REL: {best_abs_rel:.4f})')
+
+        # Periodic checkpoint
+        if epoch % cfg.mode.saving_checkpoints == 0:
+            torch.save({
+                'epoch': epoch, 'state_dict': model.state_dict(),
+                'optimizer': optimizer.state_dict(), 'best_abs_rel': best_abs_rel,
+            }, os.path.join(ckpt_dir, f'checkpoint_{epoch}.pth'))
+            print(f'  Checkpoint saved at epoch {epoch}')
+
+    print(f'\nTraining complete. Best ABS_REL: {best_abs_rel:.4f}')
+
+
+# ============================================================
+# Testing
+# ============================================================
+
+def test(cfg):
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    n_GPU = torch.cuda.device_count()
+    print(f"{n_GPU} {device} device(s)")
+
+    batch_size = cfg.mode.batch_size
+    eval_on = cfg.mode.eval_on
+
+    eval_set = SoundSpacesDataset(cfg, split=eval_on)
+    print(f'Eval [{eval_on}]: {len(eval_set)} samples')
+    eval_loader = DataLoader(eval_set, batch_size=batch_size, shuffle=False,
+                             num_workers=cfg.mode.num_threads, pin_memory=True)
+
+    # Model
+    model = build_model(cfg)
+    if n_GPU > 0:
+        model = model.cuda()
+        model = nn.DataParallel(model, list(range(n_GPU)))
+
+    # Load checkpoint
+    project_dir = os.path.dirname(os.path.abspath(__file__))
+    experiment_name = (f"{cfg.model.generator}_{cfg.dataset.name}_BS{cfg.mode.batch_size}_"
+                       f"Lr{cfg.mode.learning_rate}_{cfg.mode.optimizer}_{cfg.mode.experiment_name}")
+    ckpt_dir = os.path.join(project_dir, 'checkpoints', experiment_name)
+
+    load_epoch = cfg.mode.checkpoints
+    if load_epoch is None or str(load_epoch) == 'best':
+        ckpt_path = os.path.join(ckpt_dir, 'best_model.pth')
+    else:
+        ckpt_path = os.path.join(ckpt_dir, f'checkpoint_{load_epoch}.pth')
+    print(f'Loading: {ckpt_path}')
+
+    ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+    try:
+        model.load_state_dict(ckpt["state_dict"])
+    except RuntimeError:
+        new_sd = {(k[len('module.'):] if k.startswith('module.') else k): v
+                  for k, v in ckpt["state_dict"].items()}
+        model.load_state_dict(new_sd)
+    print(f'Loaded epoch {ckpt["epoch"]} (ABS_REL: {ckpt.get("best_abs_rel", "N/A")})')
+
+    # Evaluate
+    model.eval()
+    max_depth = cfg.dataset.max_depth
+    dataset_dir = cfg.dataset.dataset_dir
+    depth_type = cfg.dataset.depth_type
+    target_h, target_w = int(cfg.dataset.images_size[0]), int(cfg.dataset.images_size[1])
+    vis_every = cfg.mode.vis_every
+    vis_dir = os.path.join(project_dir, 'outputs', experiment_name, 'visualizations', eval_on)
+    if vis_every > 0:
+        os.makedirs(vis_dir, exist_ok=True)
+
+    depth_errors = []
+    foa_errors_list = []
+    vis_count = 0
+
+    with torch.no_grad():
+        for batch_idx, (audio, depthgt, ambi) in enumerate(eval_loader):
+            audio, depthgt, ambi = audio.to(device), depthgt.to(device), ambi.to(device)
+            gt_foa_batch = extract_foa_target_from_energy_map(ambi)
+            outputs = model(audio)
+            depth_pred = outputs["pred_depth"]
+            pred_foa_batch = outputs["pred_foa"]
+
+            for idx in range(depth_pred.shape[0]):
+                dataset_idx = batch_idx * batch_size + idx
+                if dataset_idx >= len(eval_set.samples):
+                    break
+                scene_id, step_idx = eval_set.samples[dataset_idx]
+
+                if cfg.dataset.depth_norm:
+                    ug = depthgt[idx].cpu().numpy() * max_depth
+                    up = depth_pred[idx].cpu().numpy() * max_depth
+                else:
+                    ug = depthgt[idx].cpu().numpy()
+                    up = depth_pred[idx].cpu().numpy()
+
+                depth_errors.append(compute_errors(ug, up))
+                foa_errors_list.append(compute_foa_errors(
+                    gt_foa_batch[idx].cpu().numpy(), pred_foa_batch[idx].cpu().numpy()))
+
+                if vis_every > 0 and dataset_idx % vis_every == 0:
+                    gt_2d = ug[0] if ug.ndim == 3 and ug.shape[0] == 1 else ug
+                    pred_2d = up[0] if up.ndim == 3 and up.shape[0] == 1 else up
+                    gt_rgb = load_gt_rgb(dataset_dir, scene_id, step_idx, depth_type, target_h, target_w)
+                    inp = audio[idx].cpu().numpy()
+                    spec = np.log10(inp.mean(axis=0) + 1e-10) if inp.ndim == 3 and inp.shape[0] == 2 else np.log10(inp + 1e-10)
+
+                    fig, axes = plt.subplots(1, 5, figsize=(25, 5))
+                    if gt_rgb is not None:
+                        axes[0].imshow((gt_rgb * 255).astype(np.uint8))
+                    else:
+                        axes[0].text(0.5, 0.5, 'No RGB', ha='center', va='center', transform=axes[0].transAxes)
+                    axes[0].set_title('GT RGB'); axes[0].axis('off')
+                    im1 = axes[1].imshow(np.ma.masked_where(gt_2d <= 0, gt_2d), cmap='plasma', vmin=0, vmax=max_depth)
+                    axes[1].set_title('GT Depth'); axes[1].axis('off'); plt.colorbar(im1, ax=axes[1], fraction=0.046, pad=0.04)
+                    im2 = axes[2].imshow(pred_2d, cmap='plasma', vmin=0, vmax=max_depth)
+                    axes[2].set_title('Pred Depth'); axes[2].axis('off'); plt.colorbar(im2, ax=axes[2], fraction=0.046, pad=0.04)
+                    axes[3].imshow(spec, cmap='magma', aspect='auto', origin='lower'); axes[3].set_title('Spectrogram'); axes[3].axis('off')
+                    gt_f, pred_f = gt_foa_batch[idx].cpu().numpy(), pred_foa_batch[idx].cpu().numpy()
+                    x_pos = np.arange(4)
+                    axes[4].bar(x_pos - 0.15, gt_f, 0.3, label='GT', alpha=0.8)
+                    axes[4].bar(x_pos + 0.15, pred_f, 0.3, label='Pred', alpha=0.8)
+                    axes[4].set_xticks(x_pos); axes[4].set_xticklabels(['W', 'Y', 'Z', 'X']); axes[4].legend()
+                    axes[4].set_title('FOA Coeffs')
+                    plt.suptitle(f'{scene_id} | idx={step_idx} | sample {dataset_idx}', fontsize=12)
+                    plt.tight_layout()
+                    plt.savefig(os.path.join(vis_dir, f'vis_{dataset_idx:05d}_{scene_id}_{step_idx}.png'),
+                                dpi=150, bbox_inches='tight')
+                    plt.close()
+                    vis_count += 1
+
+            if (batch_idx + 1) % 10 == 0:
+                total = min((batch_idx + 1) * batch_size, len(eval_set))
+                print(f'Processed {batch_idx + 1}/{len(eval_loader)} batches ({total} samples)')
+
+    # Print results
+    de = np.array(depth_errors)
+    md = de.mean(0)
+    foa_l1 = np.mean([e['foa_l1'] for e in foa_errors_list])
+    foa_cos = np.mean([e['foa_cosine'] for e in foa_errors_list])
+    foa_dir = np.mean([e['foa_dir_cosine'] for e in foa_errors_list])
+
+    print('\n' + '=' * 60)
+    print('Test Results — Depth Metrics')
+    print('=' * 60)
+    print(f'ABS_REL: {md[0]:.4f}')
+    print(f'RMSE:    {md[1]:.4f}')
+    print(f'Delta1:  {md[2]:.4f}')
+    print(f'Delta2:  {md[3]:.4f}')
+    print(f'Delta3:  {md[4]:.4f}')
+    print(f'Log10:   {md[5]:.4f}')
+    print(f'MAE:     {md[6]:.4f}')
+    print('=' * 60)
+    print(f'Test Results — FOA Metrics (guided channels)')
+    print('=' * 60)
+    print(f'FOA L1:          {foa_l1:.4f}')
+    print(f'FOA Cosine:      {foa_cos:.4f}')
+    print(f'FOA Dir Cosine:  {foa_dir:.4f}')
+    print('=' * 60)
+
+    if vis_count > 0:
+        print(f'{vis_count} visualizations saved to: {vis_dir}')
+
+    # Save stats
+    import pandas as pd
+    stats = pd.DataFrame({
+        'abs_rel': de[:, 0], 'rmse': de[:, 1], 'delta1': de[:, 2],
+        'delta2': de[:, 3], 'delta3': de[:, 4], 'log10': de[:, 5], 'mae': de[:, 6],
+        'foa_l1': [e['foa_l1'] for e in foa_errors_list],
+        'foa_cosine': [e['foa_cosine'] for e in foa_errors_list],
+        'foa_dir_cosine': [e['foa_dir_cosine'] for e in foa_errors_list],
+    })
+    stats_dir = os.path.join(project_dir, 'outputs', experiment_name, 'stats')
+    os.makedirs(stats_dir, exist_ok=True)
+    stats_path = os.path.join(stats_dir, f'stats_{eval_on}.pkl')
+    stats.to_pickle(stats_path)
+    print(f'Statistics saved to: {stats_path}')
+
+
+# ============================================================
+# Main
+# ============================================================
+
+def parse_args():
+    p = argparse.ArgumentParser(description='AudioDepthFOA V2: Depth from Echoes')
+
+    # Mode
+    p.add_argument('--mode', type=str, default='train', choices=['train', 'test'])
+    p.add_argument('--eval-on', type=str, default='test', choices=['test', 'val'])
+
+    # Data
+    p.add_argument('--dataset-dir', type=str,
+                   default='/home/rvi-lab/workspace/sound-spaces/dataset',
+                   help='Path to SoundSpaces dataset')
+
+    # Training
+    p.add_argument('--batch-size', type=int, default=64)
+    p.add_argument('--epochs', type=int, default=80)
+    p.add_argument('--lr', type=float, default=0.001)
+    p.add_argument('--optimizer', type=str, default='AdamW', choices=['AdamW', 'Adam', 'SGD'])
+    p.add_argument('--num-workers', type=int, default=32)
+    p.add_argument('--foa-freeze-epochs', type=int, default=20,
+                   help='Depth-only warmup epochs before enabling SH branch')
+
+    # Experiment
+    p.add_argument('--experiment-name', type=str, default='audio_depth_foa_v2_echoes_erp_v1')
+    p.add_argument('--checkpoint', type=str, default=None,
+                   help='Checkpoint to resume (epoch number or "best")')
+    p.add_argument('--vis-every', type=int, default=100,
+                   help='Visualize every N samples during test (0=skip)')
+
+    return p.parse_args()
+
+
+if __name__ == '__main__':
+    # Performance tuning
+    os.environ.setdefault('PYTORCH_CUDA_ALLOC_CONF', 'expandable_segments:True')
+    os.environ.setdefault('OMP_NUM_THREADS', '8')
+    os.environ.setdefault('MKL_NUM_THREADS', '8')
+
+    args = parse_args()
+    cfg = make_config(args)
+
+    print('=' * 60)
+    print(f'AudioDepthFOA V2 — mode={args.mode}')
+    print(f'Dataset: {args.dataset_dir}')
+    print(f'Batch size: {args.batch_size}, LR: {args.lr}, Optimizer: {args.optimizer}')
+    print('=' * 60)
+
+    if args.mode == 'train':
+        train(cfg)
+    elif args.mode == 'test':
+        test(cfg)
