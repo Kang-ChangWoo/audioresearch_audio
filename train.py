@@ -883,19 +883,16 @@ def train(cfg):
 
             if abs_rel < best_abs_rel:
                 best_abs_rel = abs_rel
+                # Remove previous best model
+                import glob
+                for old in glob.glob(os.path.join(ckpt_dir, 'best_model_epoch*.pth')):
+                    os.remove(old)
                 torch.save({
                     'epoch': epoch, 'state_dict': model.state_dict(),
                     'optimizer': optimizer.state_dict(), 'best_abs_rel': best_abs_rel,
-                }, os.path.join(ckpt_dir, 'best_model.pth'))
+                }, os.path.join(ckpt_dir, f'best_model_epoch{epoch}.pth'))
                 print(f'  >> Best model saved (ABS_REL: {best_abs_rel:.4f})')
 
-        # Periodic checkpoint
-        if epoch % cfg.mode.saving_checkpoints == 0:
-            torch.save({
-                'epoch': epoch, 'state_dict': model.state_dict(),
-                'optimizer': optimizer.state_dict(), 'best_abs_rel': best_abs_rel,
-            }, os.path.join(ckpt_dir, f'checkpoint_{epoch}.pth'))
-            print(f'  Checkpoint saved at epoch {epoch}')
 
     print(f'\nTraining complete. Best ABS_REL: {best_abs_rel:.4f}')
 
@@ -929,7 +926,12 @@ def test(cfg):
 
     load_epoch = cfg.mode.checkpoints
     if load_epoch is None or str(load_epoch) == 'best':
-        ckpt_path = os.path.join(ckpt_dir, 'best_model.pth')
+        import glob
+        best_files = sorted(glob.glob(os.path.join(ckpt_dir, 'best_model_epoch*.pth')))
+        if best_files:
+            ckpt_path = best_files[-1]
+        else:
+            ckpt_path = os.path.join(ckpt_dir, 'best_model.pth')
     else:
         ckpt_path = os.path.join(ckpt_dir, f'checkpoint_{load_epoch}.pth')
     print(f'Loading: {ckpt_path}')

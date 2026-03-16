@@ -20,5 +20,7 @@ AGENTS.md
 # Experimental code/artifacts
 dev/
 
-# Results file
-results.tsv
+# Checkpoints and outputs
+checkpoints/
+outputs/
+*.pth
