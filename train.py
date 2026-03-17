@@ -106,7 +106,7 @@ def make_config(args):
             use_berhu=True,
             use_silog=True,
             use_gradient=True,
-            use_ssim=False,
+            use_ssim=True,
             w_l1=1.0,
             w_berhu=0.5,
             w_silog=0.5,
