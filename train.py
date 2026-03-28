@@ -313,7 +313,9 @@ class AudioDepthFOAV2Generator(nn.Module):
         den = (w * basis[None] ** 2).sum(dim=(2, 3)) + eps
         return num / den
 
-    def forward(self, x, return_hist_maps=False):
+    def forward(self, x, return_hist_maps=False, ambi_maps=None):
+        if ambi_maps is not None:
+            x = torch.cat([x, ambi_maps], dim=1)
         enc_features = []
         h = self.enc0(x)
         enc_features.append(h)
@@ -651,7 +653,7 @@ def save_visualizations(vis_data, epoch, vis_dir, max_depth):
 def build_model(cfg):
     num_downs = 7 if cfg.model.generator == 'unet_128' else 8
     return AudioDepthFOAV2Generator(
-        cfg, input_nc=2, output_nc=1, num_downs=num_downs, ngf=64,
+        cfg, input_nc=6, output_nc=1, num_downs=num_downs, ngf=64,
         use_dropout=False,
         proj_dim=cfg.model.proj_dim,
         foa_dim=cfg.model.foa_dim,
@@ -793,7 +795,7 @@ def train(cfg):
             gt_foa = extract_foa_target_from_energy_map(ambi)
 
             optimizer.zero_grad()
-            outputs = model(audio, return_hist_maps=use_hist)
+            outputs = model(audio, return_hist_maps=use_hist, ambi_maps=ambi)
 
             gt_depth_sh_map, gt_depth_sh_coeffs = None, None
             if use_hist:
@@ -847,7 +849,7 @@ def train(cfg):
                 for batch_idx, (audio_v, gtdepth_v, ambi_v) in enumerate(val_loader):
                     audio_v, gtdepth_v, ambi_v = audio_v.to(device), gtdepth_v.to(device), ambi_v.to(device)
                     gt_foa_v = extract_foa_target_from_energy_map(ambi_v)
-                    outputs_v = model(audio_v, return_hist_maps=use_hist)
+                    outputs_v = model(audio_v, return_hist_maps=use_hist, ambi_maps=ambi_v)
 
                     gt_dsh, gt_dsh_c = None, None
                     if use_hist:
@@ -986,7 +988,7 @@ def test(cfg):
         for batch_idx, (audio, depthgt, ambi) in enumerate(eval_loader):
             audio, depthgt, ambi = audio.to(device), depthgt.to(device), ambi.to(device)
             gt_foa_batch = extract_foa_target_from_energy_map(ambi)
-            outputs = model(audio)
+            outputs = model(audio, ambi_maps=ambi)
             depth_pred = outputs["pred_depth"]
             pred_foa_batch = outputs["pred_foa"]
 
