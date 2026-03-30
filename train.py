@@ -1107,7 +1107,7 @@ def parse_args():
     # Training
     p.add_argument('--batch-size', type=int, default=32) #64
     p.add_argument('--epochs', type=int, default=40) #80
-    p.add_argument('--lr', type=float, default=0.002)
+    p.add_argument('--lr', type=float, default=0.0025)
     p.add_argument('--optimizer', type=str, default='AdamW', choices=['AdamW', 'Adam', 'SGD'])
     p.add_argument('--num-workers', type=int, default=16)#32
     p.add_argument('--foa-freeze-epochs', type=int, default=0,
