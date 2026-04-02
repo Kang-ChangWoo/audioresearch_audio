@@ -110,7 +110,7 @@ def make_config(args):
             w_l1=0.0,
             w_berhu=1.0,
             w_gradient=0.5,
-            w_silog=0.5,
+            w_silog=1.0,
             w_ssim=0.0,
             experiment_name=args.experiment_name,
             eval_on=args.eval_on,
