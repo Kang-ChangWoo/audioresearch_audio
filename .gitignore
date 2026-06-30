@@ -25,6 +25,5 @@ checkpoints/
 outputs/
 *.pth
 
-# Experiment results + run logs (kept local, not tracked)
-results.tsv
+# Run logs (kept local). results.tsv IS tracked (per user request).
 run.log
