@@ -542,6 +542,8 @@ def train(cfg):
     vis_indices = set(np.linspace(0, max(0, len(val_set) - 1), n_vis, dtype=int).tolist())
 
     best_abs_rel = float('inf')
+    best_score = float('inf')          # composite (abs_rel + rmse, normalised) for model selection
+    best_rmse = float('inf')
     dataset_dir = cfg.dataset.dataset_dir
     depth_type = cfg.dataset.depth_type
 
@@ -601,13 +603,22 @@ def train(cfg):
                 save_visualizations(vis_data, epoch, vis_dir, max_depth)
                 print(f'  Saved {len(vis_data)} visualizations')
 
-            if abs_rel < best_abs_rel:
+            rmse = mean_errors[1]
+            # COMPOSITE selection: balance ABS_REL and RMSE (normalised by typical scales,
+            # equal weight). ABS_REL alone systematically picks the epoch where RMSE spikes
+            # (the two anti-correlate epoch-to-epoch), so it saved RMSE-broken checkpoints.
+            score = abs_rel / 0.4 + rmse / 1.6
+            if score < best_score:
+                best_score = score
                 best_abs_rel = abs_rel
+                best_rmse = rmse
                 torch.save({'epoch': epoch, 'state_dict': model.state_dict(),
                             'optimizer': optimizer.state_dict(),
-                            'best_abs_rel': best_abs_rel, 'cfg_model': vars(mcfg)},
+                            'best_abs_rel': best_abs_rel, 'best_rmse': best_rmse,
+                            'best_score': best_score, 'cfg_model': vars(mcfg)},
                            os.path.join(ckpt_dir, 'best_model.pth'))
-                print(f'  >> Best model saved (ABS_REL: {best_abs_rel:.4f})')
+                print(f'  >> Best model saved (score {best_score:.4f} | '
+                      f'ABS_REL {best_abs_rel:.4f} RMSE {best_rmse:.4f})')
 
         # Time budget check
         elapsed = time.time() - training_start
@@ -616,7 +627,8 @@ def train(cfg):
             break
 
     total_time = time.time() - training_start
-    print(f'\nTraining complete. Best ABS_REL: {best_abs_rel:.4f}')
+    print(f'\nTraining complete. Best (composite) ABS_REL: {best_abs_rel:.4f} '
+          f'RMSE: {best_rmse:.4f} score: {best_score:.4f}')
     print(f'training_seconds: {total_time:.1f}')
     if device.type == 'cuda':
         print(f'peak_vram_mb: {torch.cuda.max_memory_allocated() / 1e6:.1f}')
