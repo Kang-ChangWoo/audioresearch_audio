@@ -35,14 +35,15 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E13 | weight EMA (decay 0.999) | 0.3732 | 1.5706 | 0.5324 | discard (ABS_REL~tied, RMSE/d1 worse — EMA lagged) |
 | **E14** | **weight EMA (decay 0.995)** | **0.3606** | **1.5548** | **0.5438** | **KEEP — NEW CHAMPION (comp 2.234 < E2 2.253)** |
 | E15 | E14 + peak LR 6e-4→8e-4 | 0.3622 | 1.5601 | 0.5336 | discard (worse on all 3; d1↓ — LR too high) |
-| E16 | E14 + peak LR 6e-4→4e-4 | running | | | — |
+| **E16** | **E14 + peak LR 6e-4→4e-4** | **0.3528** | **1.5504** | **0.5488** | **KEEP — NEW CHAMPION (comp 2.214, beats E14 on all 3)** |
+| E17 | E16 + peak LR 4e-4→3e-4 | running | | | — |
 
 (E0 fp16 AMP crashed: NaN at epoch 2 → fixed with bf16.)
 
 ## Current best
-- **CHAMPION: E14** (E2 + weight EMA decay 0.995) — **0.3606 / 1.5548 / 0.5438**, honest composite **2.234**. Beats E2 on ABS_REL & d1 at equal RMSE. First clean frontier push in a while.
-- Prior balanced champion: E2 (bf16+bs32, lr6e-4, rel w_rel=0.1) — 0.3746 / 1.554 / 0.5395.
-- Best honest metrics (no rel loss): E0c (lr4e-4) — 0.4259 / 1.520 / 0.5471.
+- **CHAMPION: E16** (EMA decay 0.995 + lr **4e-4** + w_rel 0.1) — **0.3528 / 1.5504 / 0.5488**, honest composite **2.214**. Beats E14 on all three.
+- E14 (EMA 0.995 + lr 6e-4) — 0.3606 / 1.5548 / 0.5438 (comp 2.234).
+- **LR × EMA interaction:** with EMA, honest metrics improve monotonically as peak LR drops **8e-4→6e-4→4e-4** (EMA does the noise-averaging, so low LR keeps ABS_REL good AND wins RMSE/d1). Testing 3e-4 (E17) for the floor.
 
 ## What helped
 1. **bf16 AMP + batch 32 + LR cosine anneal (E0b)** — foundation. fp16→NaN, bf16 fixed it; more epochs/hr + real annealing → ABS_REL 0.4434→0.4151, RMSE flat.

@@ -740,7 +740,7 @@ def parse_args():
 
     p.add_argument('--batch-size', type=int, default=32)
     p.add_argument('--epochs', type=int, default=10)
-    p.add_argument('--lr', type=float, default=4e-4)   # E16: lower peak LR (E15 8e-4 hurt honest metrics; E0c 4e-4 gave best d1)
+    p.add_argument('--lr', type=float, default=3e-4)   # E17: LR trend 8>6>4e-4 monotonic w/ EMA -> probe the floor at 3e-4
     p.add_argument('--optimizer', type=str, default='AdamW', choices=['AdamW', 'Adam', 'SGD'])
     p.add_argument('--num-workers', type=int, default=16)
     p.add_argument('--in-ch', type=int, default=5, choices=[2, 3, 5],
