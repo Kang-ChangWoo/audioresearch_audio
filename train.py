@@ -103,7 +103,7 @@ def make_config(args):
             coarse_head_h=16,
             coarse_head_w=32,
             w_dense=1.0,
-            w_coarse_layout=1.0,
+            w_coarse_layout=0.5,   # E18: relax the 16x32 layout regularizer (was 1.0) -> free capacity for dense depth
             w_low=0.5,
             w_rel=0.1,
             w_silog=0.0,
@@ -740,7 +740,7 @@ def parse_args():
 
     p.add_argument('--batch-size', type=int, default=32)
     p.add_argument('--epochs', type=int, default=10)
-    p.add_argument('--lr', type=float, default=3e-4)   # E17: LR trend 8>6>4e-4 monotonic w/ EMA -> probe the floor at 3e-4
+    p.add_argument('--lr', type=float, default=4e-4)   # E16 champion LR (4e-4 is the floor; 3e-4 U-turned worse)
     p.add_argument('--optimizer', type=str, default='AdamW', choices=['AdamW', 'Adam', 'SGD'])
     p.add_argument('--num-workers', type=int, default=16)
     p.add_argument('--in-ch', type=int, default=5, choices=[2, 3, 5],
