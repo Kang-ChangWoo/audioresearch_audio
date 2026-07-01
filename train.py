@@ -343,10 +343,12 @@ class RayDPT(nn.Module):
         mk_cr = lambda: nn.ModuleList([CrossBlock(dim, heads) for _ in range(nL)])
         self.cr16, self.cr32, self.cr64 = mk_cr(), mk_cr(), mk_cr()
         # E22: ray<->ray global self-attn on the 16x32 coarse grid (512 tokens, cheap) so the
-        # layout rays reason jointly after reading audio. E23 showed 1 block is enough (2 saturates),
-        # E24 showed 32x64 global attn (2048 tok) busts the budget. E25: give the winning coarse
-        # block more head diversity (8 vs 4) — width not depth, still cheap at 512 tokens.
-        self.rsa16 = SelfBlock(dim, 8)
+        # layout rays reason jointly after reading audio. E23 (2 blocks) saturated, E24 (full 32x64
+        # attn, 2048 tok) busted the budget, E25 (8 heads) was a wash -> 1 block, 4 heads is the sweet spot.
+        self.rsa16 = SelfBlock(dim, heads)
+        # E26: mid-scale global context CHEAPLY — pool F32 (32x64) down to the 16x32 coarse grid
+        # (512 tok), self-attend, upsample back, add as residual. Affordable version of E24.
+        self.rsa32p = SelfBlock(dim, heads)
         # DPT encoder skips (U-Net detail injection)
         self.se4 = nn.Conv2d(ngf * 8, dim, 1)
         self.se3 = nn.Conv2d(ngf * 4, dim, 1)
@@ -392,6 +394,9 @@ class RayDPT(nn.Module):
             kv3 = self.kv_e3(e3.flatten(2).transpose(1, 2))     # (B,2048,dim)
             F16 = self._cross(self.rp16, self.rf16, self.cr16, kv4, B, 16, 32, self_attn=self.rsa16)
             F32 = self._cross(self.rp32, self.rf32, self.cr32, kv3, B, 32, 64)
+            g = F.adaptive_avg_pool2d(F32, (16, 32)).flatten(2).transpose(1, 2)   # E26: 512-tok bottleneck
+            g = self.rsa32p(g).transpose(1, 2).reshape(B, -1, 16, 32)
+            F32 = F32 + self.up(g)                              # +mid-scale global context (32x64)
             F64 = self._cross(self.rp64, self.rf64, self.cr64, kv4, B, 64, 128)
             m16 = F16 + self.se4(e4)                             # 16x32
             d_c = torch.sigmoid(self.coarse_head(m16))          # (B,1,16,32) coarse layout

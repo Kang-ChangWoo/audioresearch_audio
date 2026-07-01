@@ -44,7 +44,8 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | **E22** | **coarse 16×32 ray↔ray self-attn** | **0.3578** | **1.5414** | **0.5506** | **KEEP — NEW CHAMPION (comp 2.209; best-ever RMSE & d1)** |
 | E23 | E22 + 2nd coarse self-attn block (deeper) | 0.3577 | 1.5437 | 0.5479 | discard (RMSE/d1 worse — 512-token grid saturates at 1 block) |
 | E24 | E22 + global self-attn at 32×64 | crash | | | discard (587s/ep busts budget, 31.8GB — 2048 tok too costly) |
-| E25 | E22 coarse self-attn, heads 4→8 | running | | | — |
+| E25 | E22 coarse self-attn, heads 4→8 | 0.3574 | 1.5406 | 0.5488 | discard (d1 worse → composite loses; 4 heads simpler) |
+| E26 | E22 + pooled 32×64 global attn (coarse cost) | running | | | — |
 
 (E0 fp16 AMP crashed: NaN at epoch 2 → fixed with bf16.)
 
