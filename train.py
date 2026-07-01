@@ -543,7 +543,7 @@ def train(cfg):
     # raw SGD iterate. Free (per-step copy, no extra fwd/bwd) and typically improves the HONEST
     # metrics (RMSE/d1) by smoothing the noisy late-training trajectory. decay=0.995 -> ~200-step window
     # (E13 decay=0.999 lagged too much on a 7-epoch run; faster decay tracks the annealed late weights).
-    EMA_DECAY = 0.99
+    EMA_DECAY = 0.995
     ema = {k: v.detach().clone() for k, v in model.state_dict().items()}
 
     # Optimizer + warmup-cosine schedule
@@ -739,7 +739,7 @@ def parse_args():
                    help='Path to SoundSpaces dataset')
 
     p.add_argument('--batch-size', type=int, default=32)
-    p.add_argument('--epochs', type=int, default=10)
+    p.add_argument('--epochs', type=int, default=7)    # E20: match the ~7 epochs that fit the 1hr budget so cosine LR anneals fully to ~0 (was 10 -> LR floored at 1e-4)
     p.add_argument('--lr', type=float, default=4e-4)   # E16 champion LR (4e-4 is the floor; 3e-4 U-turned worse)
     p.add_argument('--optimizer', type=str, default='AdamW', choices=['AdamW', 'Adam', 'SGD'])
     p.add_argument('--num-workers', type=int, default=16)
