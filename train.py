@@ -539,6 +539,12 @@ def train(cfg):
     total_params = sum(p.numel() for p in model.parameters()) / 1e6
     print(f'Model: {cfg.model.name} ({total_params:.2f}M params)')
 
+    # Weight EMA (E13): a temporal average of the weights is evaluated/saved instead of the
+    # raw SGD iterate. Free (per-step copy, no extra fwd/bwd) and typically improves the HONEST
+    # metrics (RMSE/d1) by smoothing the noisy late-training trajectory. decay=0.999 -> ~1-epoch window.
+    EMA_DECAY = 0.999
+    ema = {k: v.detach().clone() for k, v in model.state_dict().items()}
+
     # Optimizer + warmup-cosine schedule
     optimizer = _build_optimizer(model, cfg)
     steps_per_epoch = max(1, len(train_loader))
@@ -603,6 +609,13 @@ def train(cfg):
             optimizer.step()
             scheduler.step()
 
+            with torch.no_grad():                       # E13: update weight EMA
+                for k, v in model.state_dict().items():
+                    if v.dtype.is_floating_point:
+                        ema[k].mul_(EMA_DECAY).add_(v.detach(), alpha=1.0 - EMA_DECAY)
+                    else:
+                        ema[k].copy_(v)
+
             accum['total'] = accum.get('total', 0.0) + float(loss.detach())
             for k, v in parts.items():
                 accum[k] = accum.get(k, 0.0) + v
@@ -619,8 +632,10 @@ def train(cfg):
         print(f'Epoch [{epoch}/{cfg.mode.epochs}] Loss: {epoch_loss:.4f} '
               f'Time: {time.time()-t0:.1f}s LR: {scheduler.get_last_lr()[0]:.6f}')
 
-        # --- Validation ---
+        # --- Validation --- (evaluate & checkpoint the EMA weights, not the raw iterate)
         if epoch % cfg.mode.validation_iter == 0:
+            raw_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
+            model.load_state_dict(ema)                  # swap in EMA weights for eval
             mean_errors, val_loss, vis_data = evaluate(
                 model, val_loader, mcfg, device, max_depth,
                 collect_vis=vis_indices, dataset=val_set,
@@ -650,6 +665,8 @@ def train(cfg):
                            os.path.join(ckpt_dir, 'best_model.pth'))
                 print(f'  >> Best model saved (score {best_score:.4f} | '
                       f'ABS_REL {best_abs_rel:.4f} RMSE {best_rmse:.4f})')
+
+            model.load_state_dict(raw_state)            # restore raw iterate to keep training
 
         # Time budget check
         elapsed = time.time() - training_start
