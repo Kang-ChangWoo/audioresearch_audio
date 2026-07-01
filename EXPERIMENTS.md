@@ -34,7 +34,8 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E12 | w_low 0.5→1.0 | 0.3809 | 1.5754 | 0.5353 | discard (worse on all 3 → w_low=0.5 is optimal) |
 | E13 | weight EMA (decay 0.999) | 0.3732 | 1.5706 | 0.5324 | discard (ABS_REL~tied, RMSE/d1 worse — EMA lagged) |
 | **E14** | **weight EMA (decay 0.995)** | **0.3606** | **1.5548** | **0.5438** | **KEEP — NEW CHAMPION (comp 2.234 < E2 2.253)** |
-| E15 | E14 + peak LR 6e-4→8e-4 | running | | | — |
+| E15 | E14 + peak LR 6e-4→8e-4 | 0.3622 | 1.5601 | 0.5336 | discard (worse on all 3; d1↓ — LR too high) |
+| E16 | E14 + peak LR 6e-4→4e-4 | running | | | — |
 
 (E0 fp16 AMP crashed: NaN at epoch 2 → fixed with bf16.)
 
