@@ -37,7 +37,8 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E15 | E14 + peak LR 6e-4→8e-4 | 0.3622 | 1.5601 | 0.5336 | discard (worse on all 3; d1↓ — LR too high) |
 | **E16** | **E14 + peak LR 6e-4→4e-4** | **0.3528** | **1.5504** | **0.5488** | **KEEP — NEW CHAMPION (comp 2.214, beats E14 on all 3)** |
 | E17 | E16 + peak LR 4e-4→3e-4 | 0.3577 | 1.5559 | 0.5456 | discard (worse on all 3 — LR U-turns; 4e-4 is the floor) |
-| E18 | E16 + w_coarse_layout 1.0→0.5 | running | | | — |
+| E18 | E16 + w_coarse_layout 1.0→0.5 | 0.3554 | 1.5552 | 0.5447 | discard (worse on all 3 — layout reg at 1.0 is right) |
+| E19 | E16 + EMA decay 0.995→0.99 | running | | | — |
 
 (E0 fp16 AMP crashed: NaN at epoch 2 → fixed with bf16.)
 

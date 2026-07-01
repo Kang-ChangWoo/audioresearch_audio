@@ -103,7 +103,7 @@ def make_config(args):
             coarse_head_h=16,
             coarse_head_w=32,
             w_dense=1.0,
-            w_coarse_layout=0.5,   # E18: relax the 16x32 layout regularizer (was 1.0) -> free capacity for dense depth
+            w_coarse_layout=1.0,   # E18 confirmed 1.0 optimal (0.5 lost on all 3, like w_low=0.5)
             w_low=0.5,
             w_rel=0.1,
             w_silog=0.0,
@@ -543,7 +543,7 @@ def train(cfg):
     # raw SGD iterate. Free (per-step copy, no extra fwd/bwd) and typically improves the HONEST
     # metrics (RMSE/d1) by smoothing the noisy late-training trajectory. decay=0.995 -> ~200-step window
     # (E13 decay=0.999 lagged too much on a 7-epoch run; faster decay tracks the annealed late weights).
-    EMA_DECAY = 0.995
+    EMA_DECAY = 0.99
     ema = {k: v.detach().clone() for k, v in model.state_dict().items()}
 
     # Optimizer + warmup-cosine schedule
