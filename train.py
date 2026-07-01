@@ -104,7 +104,7 @@ def make_config(args):
             coarse_head_w=32,
             w_dense=1.0,
             w_coarse_layout=1.0,
-            w_low=1.0,
+            w_low=0.5,
             w_rel=0.1,
             w_silog=0.0,
         ),
