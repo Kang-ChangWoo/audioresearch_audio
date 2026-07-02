@@ -88,7 +88,7 @@ def make_config(args):
             n_heads=4,
             ray_cross_layers=2,
             raydpt_win32=5,
-            raydpt_win64=3,
+            raydpt_win64=5,   # E41: larger local-attn window at 64x128 (was 3) — more mid-scale spatial context for RMSE/d1
             raydpt_lite=args.raydpt_lite,
             raydpt_full_decode=args.raydpt_full_decode,
             # ray-feature bank flags
@@ -105,7 +105,7 @@ def make_config(args):
             w_dense=1.0,
             w_coarse_layout=1.0,   # E18 confirmed 1.0 optimal (0.5 lost on all 3, like w_low=0.5)
             w_low=0.5,
-            w_rel=0.13,   # E40: berHu holds RMSE low, so afford heavier relative loss to recover d1/ABS_REL (combine near-misses)
+            w_rel=0.1,    # confirmed optimal (E32 0.08, E40 0.13 both worse)
             w_grad=0.05,  # champion (E34): edge-loss sweet spot (0.03 & 0.1 both worse)
             w_silog=0.0,
         ),
@@ -492,9 +492,7 @@ def silog_loss(D, gt, mask, lam=0.85, eps=1e-6):
 def composite_loss(out, gt, mask, mcfg):
     """Band-limited objective: dense masked-MAE + coarse-layout + low-pass.
     gt / out['D'] are normalised depth in [0,1]. Returns (loss, parts)."""
-    # E39: blend MAE (protects ABS_REL/d1) with berHu (crushes RMSE). Pure berHu (E38) got RMSE
-    # 1.4746 but overshot ABS_REL/d1; a 50/50 blend keeps much of the RMSE gain with less damage.
-    main = 0.5 * masked_mae(out["D"], gt, mask) + 0.5 * masked_berhu(out["D"], gt, mask)
+    main = masked_mae(out["D"], gt, mask)   # E34 champion (berHu/blend E38-E40 = RMSE frontier slide, no composite gain)
     loss = mcfg.w_dense * main
     # relative-error term: directly targets the eval metric ABS_REL = mean(|D-gt|/gt).
     # gt.clamp(0.01)=0.1m floor matches the metric's near-depth regime; max_depth cancels,
