@@ -65,7 +65,25 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E41 | E34 + lsa64 window 3→5 | crash | | | discard (709s/ep — win25 einsum too costly; killed ep1) |
 | E42 | E34 + batch size 32→40 | 0.3507 | 1.5352 | 0.5552 | discard (=tie E34, within noise; batch size neutral) |
 | E43 | E34 + coarse-to-fine guidance (inject d_c into decoder) | 0.3542 | 1.5417 | 0.5551 | discard (loses 0.007; layout already in decoder feats) |
-| E44 | E34 + global-audio FiLM conditioning of decoder | running | | | — |
+| E44 | E34 + global-audio FiLM conditioning of decoder | 0.3552 | 1.5401 | 0.5542 | discard (loses 0.009; audio cond. already saturated by cross-attn) |
+| E45 | E34 + SwiGLU FFN in coarse GeoSelfBlock | running | | | — |
+
+## CONVERGED (after ~44 experiments)
+
+Baseline **0.4434 / 1.5907 / 0.5236** → champion **E34 0.3512 / 1.5313 / 0.5545** (comp 2.189): **ABS_REL −21%, RMSE −3.7%, d1 +3.1 pts**. Noise floor ≈ **0.0045 composite** (E36 rerun) — only Δ>0.005 is real. E29 ≈ E34 (within noise).
+
+**Robust wins (each cleared the noise floor):**
+1. **bf16 AMP + batch 32 + cosine anneal** (E0b) — foundation; more epochs/hr + real annealing.
+2. **lr 4e-4** (E16) — best honest-metric LR (8e-4→6e-4→4e-4 monotone; 3e-4 U-turns).
+3. **Weight EMA, decay 0.995** (E14/E16) — temporal weight average; free; smooths late-training noise.
+4. **Coarse 16×32 ray↔ray self-attn** (E22) — layout rays reason jointly; first architectural win.
+5. **Geometry-aware bias on that self-attn** (E27) — learned per-head bias on ray-pair cos angular distance.
+6. **Gated DPT skips** (E29) — ray features gate per-scale how much encoder detail to admit.
+7. **Light edge/gradient loss w_grad=0.05** (E34) — marginal; sharpens boundaries (heavier hurts RMSE-balance).
+
+**Dead ends:** capacity adds (deeper/wider coarse block E23/E25, 2nd audio read E37, mid-scale global attn E24/E26) — saturate or bust the epoch budget; berHu loss (E38–E40) — strong RMSE lever but a flat frontier slide (trades d1/ABS_REL); larger LR/EMA/wd/w_rel/w_grad off-optimum; batch size (E42), coarse-to-fine guidance (E43), global-audio FiLM (E44) — neutral/redundant; larger local-attn window (E41) — too costly.
+
+**Invariant honored throughout:** RayBank ray queries × audio cross-attention (ray-conditioning). Continuing to probe occasional novel ideas from a bank (SwiGLU, log-depth aux loss, attention temperature, EMA warmup) — judged strictly > noise floor.
 
 (E0 fp16 AMP crashed: NaN at epoch 2 → fixed with bf16.)
 

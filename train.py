@@ -208,6 +208,19 @@ class FFN(nn.Module):
         return self.net(x)
 
 
+class SwiGLU(nn.Module):
+    """Gated SiLU FFN (SwiGLU): out = W2(SiLU(W1 x) * W3 x). E45: used in the coarse GeoSelfBlock."""
+    def __init__(self, dim, hidden=None):
+        super().__init__()
+        hidden = hidden or dim * 2
+        self.w = nn.Linear(dim, 2 * hidden)
+        self.o = nn.Linear(hidden, dim)
+
+    def forward(self, x):
+        a, b = self.w(x).chunk(2, -1)
+        return self.o(F.silu(a) * b)
+
+
 class CrossBlock(nn.Module):
     def __init__(self, dim, heads):
         super().__init__()
@@ -249,7 +262,7 @@ class GeoSelfBlock(nn.Module):
         self.n1, self.n2 = nn.LayerNorm(dim), nn.LayerNorm(dim)
         self.to_qkv = nn.Linear(dim, dim * 3)
         self.proj = nn.Linear(dim, dim)
-        self.ffn = FFN(dim)
+        self.ffn = SwiGLU(dim)                                    # E45: gated FFN in the winning coarse block
         self.register_buffer("geom", geom)                       # (N,N,G) pairwise geom feats
         self.bias_mlp = nn.Sequential(nn.Linear(geom.shape[-1], 32), nn.GELU(), nn.Linear(32, heads))
 
@@ -394,7 +407,6 @@ class RayDPT(nn.Module):
         self.lsa32 = LocalSphericalAttention(dim, heads, 32, 64, getattr(cfg, "raydpt_win32", 5))
         self.lsa64 = LocalSphericalAttention(dim, heads, 64, 128, getattr(cfg, "raydpt_win64", 3))
         self.coarse_head = nn.Conv2d(dim, 1, 1)
-        self.film = nn.Linear(ngf * 8, dim * 2)   # E44: global-audio FiLM — modulate the fine decoder by a global audio embedding
         self.head = nn.Sequential(conv_bn(dim, ngf), conv_bn(ngf, ngf), nn.Conv2d(ngf, 1, 3, 1, 1))
         self.lite = getattr(cfg, "raydpt_lite", False)        # 2-scale (32,64) lite variant
         # full-decode: LEARNED upsample 64x128 -> 256x512 (+e1 skip) instead of bilinear x4.
@@ -436,10 +448,6 @@ class RayDPT(nn.Module):
             d_c = torch.sigmoid(self.coarse_head(m16))          # (B,1,16,32) coarse layout
             x = self.lsa32(self.refine32(self.up(m16) + F32 + torch.sigmoid(self.g3(F32)) * self.se3(e3)))   # 32x64
             x = self.lsa64(self.refine64(self.up(x) + F64 + torch.sigmoid(self.g2(F64)) * self.se2(e2)))     # 64x128
-        # E44: global-audio FiLM — a global audio embedding (mean-pooled e4) modulates the fine
-        # features (per-channel scale+shift) so the whole decode adapts to the scene's audio.
-        sc, sh = self.film(e4.mean(dim=(2, 3))).chunk(2, -1)   # (B,dim),(B,dim)
-        x = x * (1 + sc[..., None, None]) + sh[..., None, None]
         if self.full_decode:                                   # LEARNED upsample 64x128 -> 256x512
             xf = self.up(self.proj_fd(x))                       # 128x256, ngf
             xf = self.dec1(xf + self.se1(e1))                  # + e1 skip
