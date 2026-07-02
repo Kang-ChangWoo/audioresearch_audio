@@ -105,7 +105,7 @@ def make_config(args):
             w_dense=1.0,
             w_coarse_layout=1.0,   # E18 confirmed 1.0 optimal (0.5 lost on all 3, like w_low=0.5)
             w_low=0.5,
-            w_rel=0.1,
+            w_rel=0.08,   # E32: lighten relative loss (0.1->0.08) — the E29 arch improved honest metrics, so rebalance toward them
             w_silog=0.0,
         ),
         mode=Cfg(
@@ -371,7 +371,6 @@ class RayDPT(nn.Module):
         self.kv_e3 = nn.Linear(ngf * 4, dim)
         mk_cr = lambda: nn.ModuleList([CrossBlock(dim, heads) for _ in range(nL)])
         self.cr16, self.cr32, self.cr64 = mk_cr(), mk_cr(), mk_cr()
-        self.cr16.append(CrossBlock(dim, heads))   # E31: deeper coarse ray<->audio read (3 blocks @ 16x32, cheap 512 tok)
         # E22: ray<->ray global self-attn on the 16x32 coarse grid (512 tokens) so the layout rays
         # reason jointly after reading audio. Capacity saturates (E23 depth, E25 heads, E26 mid-scale).
         # E27: make it GEOMETRY-AWARE — add a learned bias on the cos angular distance between ray
