@@ -105,7 +105,8 @@ def make_config(args):
             w_dense=1.0,
             w_coarse_layout=1.0,   # E18 confirmed 1.0 optimal (0.5 lost on all 3, like w_low=0.5)
             w_low=0.5,
-            w_rel=0.08,   # E32: lighten relative loss (0.1->0.08) — the E29 arch improved honest metrics, so rebalance toward them
+            w_rel=0.1,    # confirmed optimal (E32 0.08 worse; 0.13+ worse on old arch)
+            w_grad=0.1,   # E33: edge-aware gradient-matching loss (sharp, correctly-located depth boundaries)
             w_silog=0.0,
         ),
         mode=Cfg(
@@ -492,6 +493,18 @@ def composite_loss(out, gt, mask, mcfg):
     # scale-invariant log term (structure), stacked on the relative term (magnitude).
     sil = silog_loss(out["D"], gt, mask)
     loss = loss + mcfg.w_silog * sil
+    # E33: edge-aware gradient-matching — match horizontal/vertical depth differences so predicted
+    # depth EDGES land where the gt edges are (sharper boundaries -> better RMSE/d1). Masked to
+    # valid pairs. w_grad=0 recovers the prior objective.
+    wg = getattr(mcfg, "w_grad", 0.0)
+    if wg:
+        D, g = out["D"], gt
+        dyD = (D[:, :, 1:, :] - D[:, :, :-1, :]).abs(); dyg = (g[:, :, 1:, :] - g[:, :, :-1, :]).abs()
+        dxD = (D[:, :, :, 1:] - D[:, :, :, :-1]).abs(); dxg = (g[:, :, :, 1:] - g[:, :, :, :-1]).abs()
+        my = mask[:, :, 1:, :] * mask[:, :, :-1, :]; mx = mask[:, :, :, 1:] * mask[:, :, :, :-1]
+        grad = (((dyD - dyg).abs() * my).sum() + ((dxD - dxg).abs() * mx).sum()) \
+               / (my.sum() + mx.sum()).clamp(min=1e-6)
+        loss = loss + wg * grad
     chh, chw = mcfg.coarse_head_h, mcfg.coarse_head_w
     gt_c = F.adaptive_avg_pool2d(gt, (chh, chw))
     m_c = F.adaptive_avg_pool2d(mask, (chh, chw))
