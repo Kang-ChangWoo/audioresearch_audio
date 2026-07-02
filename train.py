@@ -492,7 +492,9 @@ def silog_loss(D, gt, mask, lam=0.85, eps=1e-6):
 def composite_loss(out, gt, mask, mcfg):
     """Band-limited objective: dense masked-MAE + coarse-layout + low-pass.
     gt / out['D'] are normalised depth in [0,1]. Returns (loss, parts)."""
-    main = masked_berhu(out["D"], gt, mask)   # E38: berHu (was masked_mae) — up-weight large-depth errors for RMSE
+    # E39: blend MAE (protects ABS_REL/d1) with berHu (crushes RMSE). Pure berHu (E38) got RMSE
+    # 1.4746 but overshot ABS_REL/d1; a 50/50 blend keeps much of the RMSE gain with less damage.
+    main = 0.5 * masked_mae(out["D"], gt, mask) + 0.5 * masked_berhu(out["D"], gt, mask)
     loss = mcfg.w_dense * main
     # relative-error term: directly targets the eval metric ABS_REL = mean(|D-gt|/gt).
     # gt.clamp(0.01)=0.1m floor matches the metric's near-depth regime; max_depth cancels,

@@ -59,7 +59,8 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E35 | E34 + gradient loss w_grad=0.03 (bracket) | 0.3525 | 1.5448 | 0.5548 | discard (RMSE +0.014; non-monotonic sweep ⇒ ~0.01 RMSE noise) |
 | E36 | Confirmation rerun of E34 (noise gauge) | 0.3515 | 1.5389 | 0.5547 | keep (rerun; comp 2.194 vs E34 2.189 → **noise floor ~0.0045**) |
 | E37 | E34 + 2nd coarse read of hi-res audio (kv_e3) | 0.3508 | 1.5531 | 0.5473 | discard (BUDGET BUST: 574s/ep → only 6 epochs, under-annealed, comp 2.218) |
-| E38 | E34 + berHu main loss (was MAE) | running | | | — |
+| E38 | E34 + berHu main loss (was MAE) | 0.3775 | **1.4746** | 0.5424 | discard (RMSE massive best-ever −0.057 but ABS_REL/d1 sink composite) |
+| E39 | E34 + 0.5·MAE + 0.5·berHu blend | running | | | — |
 
 (E0 fp16 AMP crashed: NaN at epoch 2 → fixed with bf16.)
 
