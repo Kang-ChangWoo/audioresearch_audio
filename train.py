@@ -265,14 +265,13 @@ class GeoSelfBlock(nn.Module):
         self.ffn = FFN(dim)                                      # E45 confirmed: SwiGLU no better (coarse block saturated)
         self.register_buffer("geom", geom)                       # (N,N,G) pairwise geom feats
         self.bias_mlp = nn.Sequential(nn.Linear(geom.shape[-1], 32), nn.GELU(), nn.Linear(32, heads))
-        self.logit_scale = nn.Parameter(torch.zeros(1))          # E47: learnable attention temperature (exp(0)=1)
 
     def forward(self, q):
         B, N, C = q.shape
         x = self.n1(q)
         qkv = self.to_qkv(x).reshape(B, N, 3, self.h, self.dh).permute(2, 0, 3, 1, 4)
         qq, kk, vv = qkv[0], qkv[1], qkv[2]                      # (B,h,N,dh)
-        attn = (qq @ kk.transpose(-2, -1)) * self.scale * self.logit_scale.exp()   # (B,h,N,N) E47: learned temp
+        attn = (qq @ kk.transpose(-2, -1)) * self.scale          # (B,h,N,N)
         bias = self.bias_mlp(self.geom).permute(2, 0, 1)         # (h,N,N)
         attn = (attn + bias[None]).softmax(-1)
         o = (attn @ vv).transpose(1, 2).reshape(B, N, C)
@@ -690,6 +689,7 @@ def train(cfg):
     depth_type = cfg.dataset.depth_type
 
     training_start = time.time()
+    gstep = 0                                       # E48: global step counter for EMA warmup
     for epoch in range(start_epoch, cfg.mode.epochs + 1):
         model.train()
         t0 = time.time()
@@ -714,9 +714,11 @@ def train(cfg):
             optimizer.step()
             scheduler.step()
 
+            gstep += 1
+            warmup_ema = gstep < steps_per_epoch    # E48: EMA warmup — track (not average) noisy 1st-epoch weights
             with torch.no_grad():                       # E13: update weight EMA
                 for k, v in model.state_dict().items():
-                    if v.dtype.is_floating_point:
+                    if v.dtype.is_floating_point and not warmup_ema:
                         ema[k].mul_(EMA_DECAY).add_(v.detach(), alpha=1.0 - EMA_DECAY)
                     else:
                         ema[k].copy_(v)
