@@ -646,7 +646,7 @@ def train(cfg):
     # raw SGD iterate. Free (per-step copy, no extra fwd/bwd) and typically improves the HONEST
     # metrics (RMSE/d1) by smoothing the noisy late-training trajectory. decay=0.995 -> ~200-step window
     # (E13 decay=0.999 lagged too much on a 7-epoch run; faster decay tracks the annealed late weights).
-    EMA_DECAY = 0.995
+    EMA_DECAY = 0.997   # E49: bracket 0.995(champ) vs 0.999(too slow) — probe 0.997
     ema = {k: v.detach().clone() for k, v in model.state_dict().items()}
 
     # Optimizer + warmup-cosine schedule
@@ -689,7 +689,6 @@ def train(cfg):
     depth_type = cfg.dataset.depth_type
 
     training_start = time.time()
-    gstep = 0                                       # E48: global step counter for EMA warmup
     for epoch in range(start_epoch, cfg.mode.epochs + 1):
         model.train()
         t0 = time.time()
@@ -714,11 +713,9 @@ def train(cfg):
             optimizer.step()
             scheduler.step()
 
-            gstep += 1
-            warmup_ema = gstep < steps_per_epoch    # E48: EMA warmup — track (not average) noisy 1st-epoch weights
             with torch.no_grad():                       # E13: update weight EMA
                 for k, v in model.state_dict().items():
-                    if v.dtype.is_floating_point and not warmup_ema:
+                    if v.dtype.is_floating_point:
                         ema[k].mul_(EMA_DECAY).add_(v.detach(), alpha=1.0 - EMA_DECAY)
                     else:
                         ema[k].copy_(v)
