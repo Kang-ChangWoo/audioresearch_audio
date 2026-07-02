@@ -67,7 +67,8 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E43 | E34 + coarse-to-fine guidance (inject d_c into decoder) | 0.3542 | 1.5417 | 0.5551 | discard (loses 0.007; layout already in decoder feats) |
 | E44 | E34 + global-audio FiLM conditioning of decoder | 0.3552 | 1.5401 | 0.5542 | discard (loses 0.009; audio cond. already saturated by cross-attn) |
 | E45 | E34 + SwiGLU FFN in coarse GeoSelfBlock | 0.3544 | 1.5388 | 0.5520 | discard (loses 0.012; coarse block saturated) |
-| E46 | E34 + log-depth L1 aux loss (w_logd=0.1) | running | | | — |
+| E46 | E34 + log-depth L1 aux loss (w_logd=0.1) | 0.3614 | 1.5234 | 0.5550 | discard (=tie, within noise; another RMSE↔ABS_REL frontier slide) |
+| E47 | E34 + learnable attention temperature (coarse block) | running | | | — |
 
 ## CONVERGED (after ~44 experiments)
 

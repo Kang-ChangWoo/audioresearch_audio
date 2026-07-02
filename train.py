@@ -107,7 +107,6 @@ def make_config(args):
             w_low=0.5,
             w_rel=0.1,    # confirmed optimal (E32 0.08, E40 0.13 both worse)
             w_grad=0.05,  # champion (E34): edge-loss sweet spot (0.03 & 0.1 both worse)
-            w_logd=0.1,   # E46: log-depth L1 aux loss — multiplicative accuracy (targets d1)
             w_silog=0.0,
         ),
         mode=Cfg(
@@ -266,13 +265,14 @@ class GeoSelfBlock(nn.Module):
         self.ffn = FFN(dim)                                      # E45 confirmed: SwiGLU no better (coarse block saturated)
         self.register_buffer("geom", geom)                       # (N,N,G) pairwise geom feats
         self.bias_mlp = nn.Sequential(nn.Linear(geom.shape[-1], 32), nn.GELU(), nn.Linear(32, heads))
+        self.logit_scale = nn.Parameter(torch.zeros(1))          # E47: learnable attention temperature (exp(0)=1)
 
     def forward(self, q):
         B, N, C = q.shape
         x = self.n1(q)
         qkv = self.to_qkv(x).reshape(B, N, 3, self.h, self.dh).permute(2, 0, 3, 1, 4)
         qq, kk, vv = qkv[0], qkv[1], qkv[2]                      # (B,h,N,dh)
-        attn = (qq @ kk.transpose(-2, -1)) * self.scale          # (B,h,N,N)
+        attn = (qq @ kk.transpose(-2, -1)) * self.scale * self.logit_scale.exp()   # (B,h,N,N) E47: learned temp
         bias = self.bias_mlp(self.geom).permute(2, 0, 1)         # (h,N,N)
         attn = (attn + bias[None]).softmax(-1)
         o = (attn @ vv).transpose(1, 2).reshape(B, N, C)
