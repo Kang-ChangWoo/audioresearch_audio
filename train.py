@@ -88,7 +88,7 @@ def make_config(args):
             n_heads=4,
             ray_cross_layers=2,
             raydpt_win32=5,
-            raydpt_win64=5,   # E41: larger local-attn window at 64x128 (was 3) — more mid-scale spatial context for RMSE/d1
+            raydpt_win64=3,   # E41 confirmed: window 5 at 64x128 too costly (709s/ep) — 3 is the budget-optimal
             raydpt_lite=args.raydpt_lite,
             raydpt_full_decode=args.raydpt_full_decode,
             # ray-feature bank flags
@@ -821,7 +821,7 @@ def parse_args():
                    default='/home/rvi-lab/workspace/sound-spaces/dataset_simplified',
                    help='Path to SoundSpaces dataset')
 
-    p.add_argument('--batch-size', type=int, default=32)
+    p.add_argument('--batch-size', type=int, default=40)   # E42: bs 32->40 (more stable grads, better GPU util; VRAM ~37GB)
     p.add_argument('--epochs', type=int, default=10)   # E20 confirmed 10 optimal: LR floor 1e-4 keeps the rel-loss learning (anneal->0 hurt ABS_REL/d1)
     p.add_argument('--lr', type=float, default=4e-4)   # E16 champion LR (4e-4 is the floor; 3e-4 U-turned worse)
     p.add_argument('--optimizer', type=str, default='AdamW', choices=['AdamW', 'Adam', 'SGD'])
