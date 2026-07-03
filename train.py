@@ -398,9 +398,9 @@ class RayDPT(nn.Module):
         self.rsa16 = GeoSelfBlock(dim, heads, torch.from_numpy(geom16))
         # E50: geometry-aware self-attn on the FUSED coarse features (post encoder-skip), so the
         # assembled layout reasons geometrically before the coarse head / fine decode.
-        # E51: 2 stacked blocks (post-fusion may not saturate like the pre-fusion stack E23 did).
-        self.rsa16b = nn.Sequential(GeoSelfBlock(dim, heads, torch.from_numpy(geom16.copy())),
-                                    GeoSelfBlock(dim, heads, torch.from_numpy(geom16.copy())))
+        # E51: 2 stacked blocks won (post-fusion does NOT saturate like pre-fusion E23). E52: 3 blocks.
+        self.rsa16b = nn.Sequential(*[GeoSelfBlock(dim, heads, torch.from_numpy(geom16.copy()))
+                                      for _ in range(3)])
         # DPT encoder skips (U-Net detail injection)
         self.se4 = nn.Conv2d(ngf * 8, dim, 1)
         self.se3 = nn.Conv2d(ngf * 4, dim, 1)
