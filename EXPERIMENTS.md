@@ -90,7 +90,8 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E66 | light 128×256 learned decode | 0.3471 | 1.4853 | 0.5743 | discard (0.021 worse, RMSE up — resolution not the bottleneck; audio→depth-limited) |
 | E67 | 3rd rsa16b geometry block (affordable) | 0.3399 | 1.4812 | 0.5795 | discard (identical 2.0949; geometry saturates at 2 blocks even with budget) |
 | E68 | widen dim 192→256 | 0.3407 | 1.4896 | 0.5766 | discard (0.014 worse; NOT capacity-limited — confirms anneal-limited) |
-| E69 | full anneal (epochs 10→9, LR→0 over the 9 run epochs) | running | | | — |
+| E69 | full anneal (epochs 10→9, LR→0) | 0.3425 | 1.4759 | 0.5789 | confirm (tied 2.0948; anneal depth neutral — E65 win was more epochs). kept epochs=10 |
+| E70 | learned positional embeddings on audio tokens (kv) | running | | | — |
 
 ## Current champion & summary (~50 experiments)
 

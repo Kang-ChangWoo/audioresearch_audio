@@ -383,6 +383,11 @@ class RayDPT(nn.Module):
         # audio kv: e4 (512 tok), e3 (2048 tok). 64-scale reuses e4 (cheap global cue).
         self.kv_e4 = nn.Linear(ngf * 8, dim)
         self.kv_e3 = nn.Linear(ngf * 4, dim)
+        # E70: learned positional embeddings on the AUDIO tokens (keys/values). Previously the audio
+        # tokens had NO position info — rays (which carry ray-direction feats) couldn't localize WHERE
+        # a directional cue sits in the audio field. Zero-init = starts as identity, learns spatial structure.
+        self.kv4_pos = nn.Parameter(torch.zeros(1, 16 * 32, dim))
+        self.kv3_pos = nn.Parameter(torch.zeros(1, 32 * 64, dim))
         mk_cr = lambda: nn.ModuleList([CrossBlock(dim, heads) for _ in range(nL)])
         self.cr16, self.cr32, self.cr64 = mk_cr(), mk_cr(), mk_cr()
         # E22: ray<->ray global self-attn on the 16x32 coarse grid (512 tokens) so the layout rays
@@ -452,7 +457,7 @@ class RayDPT(nn.Module):
     def forward(self, spec, coarse_feat=None, sh_basis=None):
         B = spec.size(0)
         e1 = self.enc.e1(spec); e2 = self.enc.e2(e1); e3 = self.enc.e3(e2); e4 = self.enc.e4(e3)
-        kv4 = self.kv_e4(e4.flatten(2).transpose(1, 2))        # (B,512,dim)
+        kv4 = self.kv_e4(e4.flatten(2).transpose(1, 2)) + self.kv4_pos   # (B,512,dim) + E70 audio pos-emb
         if self.lite:
             # 2-scale lite: ONE ray cross-attn at 32x64 (Q32 <- e4), e3/e2 projection
             # skips + local spherical attn. Isolates the DPT-fusion / ray-grid gain.
@@ -462,7 +467,7 @@ class RayDPT(nn.Module):
             x = self.lsa32(self.refine32(m))                    # 32x64
             x = self.lsa64(self.refine64(self.up(x) + self.se2(e2)))   # 64x128
         else:
-            kv3 = self.kv_e3(e3.flatten(2).transpose(1, 2))     # (B,2048,dim)
+            kv3 = self.kv_e3(e3.flatten(2).transpose(1, 2)) + self.kv3_pos   # (B,2048,dim) + E70 audio pos-emb
             F16 = self._cross(self.rp16, self.rf16, self.cr16, kv4, B, 16, 32)   # E54: drop pre-fusion geo-attn (post-fusion rsa16b subsumes it?)
             F32 = self._cross(self.rp32, self.rf32, self.cr32, kv3, B, 32, 64)
             # E65: drop the finest-scale F64 cross-attn (8192 ray queries — one of the biggest ops).
@@ -866,7 +871,7 @@ def parse_args():
                    help='Path to SoundSpaces dataset')
 
     p.add_argument('--batch-size', type=int, default=32)   # E42 confirmed: bs 40 tied bs 32 (neutral) — keep simpler default
-    p.add_argument('--epochs', type=int, default=9)   # E69: with F64 gone ~9 epochs run; anneal cosine fully to ~0 over them (re-test E20's anneal->0 in the deeper 9-epoch regime — model is anneal-limited)
+    p.add_argument('--epochs', type=int, default=10)   # E69 confirmed anneal DEPTH is neutral (epochs=9 LR->0 tied E65); 10 keeps the ~9-run + 1e-4 floor. E65's win was more epochs, not lower LR
     p.add_argument('--lr', type=float, default=4e-4)   # E16 champion LR (4e-4 is the floor; 3e-4 U-turned worse)
     p.add_argument('--optimizer', type=str, default='AdamW', choices=['AdamW', 'Adam', 'SGD'])
     p.add_argument('--num-workers', type=int, default=16)
