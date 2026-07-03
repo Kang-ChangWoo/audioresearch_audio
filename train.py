@@ -411,6 +411,9 @@ class RayDPT(nn.Module):
         # E59 confirmed 3 blocks bust budget (560s) & E52 showed they lose on quality: 2 is the sweet spot.
         self.rsa16b = nn.Sequential(GeoSelfBlock(dim, heads, torch.from_numpy(geom16b.copy())),
                                     GeoSelfBlock(dim, heads, torch.from_numpy(geom16b.copy())))
+        # E61: 2nd cross-attn round at m16 — after rsa16b assembles+geo-reasons the coarse layout,
+        # rays RE-GATHER audio evidence (kv4) conditioned on that layout (residual). Single layer (budget).
+        self.cr16b = CrossBlock(dim, heads)
         # DPT encoder skips (U-Net detail injection)
         self.se4 = nn.Conv2d(ngf * 8, dim, 1)
         self.se3 = nn.Conv2d(ngf * 4, dim, 1)
@@ -460,7 +463,9 @@ class RayDPT(nn.Module):
             F32 = self._cross(self.rp32, self.rf32, self.cr32, kv3, B, 32, 64)
             F64 = self._cross(self.rp64, self.rf64, self.cr64, kv4, B, 64, 128)
             m16 = F16 + torch.sigmoid(self.g4(F16)) * self.se4(e4)            # 16x32 (gated skip)
-            m16 = self.rsa16b(m16.flatten(2).transpose(1, 2)).transpose(1, 2).reshape(B, -1, 16, 32)  # E50: geo self-attn on fused
+            g16 = self.rsa16b(m16.flatten(2).transpose(1, 2))    # E50: geo self-attn on fused (B,512,dim)
+            g16 = g16 + self.cr16b(g16, kv4)                     # E61: re-gather audio conditioned on geo-reasoned layout
+            m16 = g16.transpose(1, 2).reshape(B, -1, 16, 32)
             d_c = torch.sigmoid(self.coarse_head(m16))          # (B,1,16,32) coarse layout
             x = self.lsa32(self.refine32(self.up(m16) + F32 + torch.sigmoid(self.g3(F32)) * self.se3(e3)))   # 32x64
             x = self.lsa64(self.refine64(self.up(x) + F64 + torch.sigmoid(self.g2(F64)) * self.se2(e2)))     # 64x128
