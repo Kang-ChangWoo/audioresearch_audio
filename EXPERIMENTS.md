@@ -93,7 +93,8 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E69 | full anneal (epochs 10→9, LR→0) | 0.3425 | 1.4759 | 0.5789 | confirm (tied 2.0948; anneal depth neutral — E65 win was more epochs). kept epochs=10 |
 | E70 | learned audio-token positional embeddings | 0.3430 | 1.4752 | 0.5784 | discard (neutral 2.0957; conv encoder already encodes position) |
 | E71 | E65 confirmation rerun | 0.3432 | 1.4821 | 0.5783 | confirm (2.1004, |Δ|=0.007 — champion robust, config true comp ~2.097) |
-| E72 | iterative ray refinement (2nd shared-weight cross-attn+geo pass) | running | | | — |
+| E72 | iterative ray refinement (2nd cross-attn+geo pass) | 0.3412 | 1.4825 | 0.5799 | discard (neutral 2.0957; single-pass sufficient) |
+| E73 | coarse rays attend BOTH coarse+fine audio (kv4+kv3) | running | | | — |
 
 ## Current champion & summary (~50 experiments)
 
