@@ -413,10 +413,8 @@ class RayDPT(nn.Module):
                                     GeoSelfBlock(dim, heads, torch.from_numpy(geom16b.copy())))
         # E61 tried a 2nd cross-attn round here (re-gather audio post-geo) — within-noise worse + budget
         # pressure; reverted. Post-fusion geometry (rsa16b) is the ceiling of this subsystem.
-        # E63: FiLM — a GLOBAL audio embedding (mean-pooled audio tokens) modulates the coarse layout
-        # via per-channel scale+shift (a different conditioning path than the per-ray cross-attn).
-        self.film = nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, dim * 2))
-        nn.init.zeros_(self.film[-1].weight); nn.init.zeros_(self.film[-1].bias)   # start as identity
+        # E63 tried FiLM global-audio modulation of m16 — within-noise worse; the per-ray cross-attn
+        # already supplies the audio evidence. Reverted.
         # DPT encoder skips (U-Net detail injection)
         self.se4 = nn.Conv2d(ngf * 8, dim, 1)
         self.se3 = nn.Conv2d(ngf * 4, dim, 1)
@@ -467,8 +465,6 @@ class RayDPT(nn.Module):
             F64 = self._cross(self.rp64, self.rf64, self.cr64, kv4, B, 64, 128)
             m16 = F16 + torch.sigmoid(self.g4(F16)) * self.se4(e4)            # 16x32 (gated skip)
             m16 = self.rsa16b(m16.flatten(2).transpose(1, 2)).transpose(1, 2).reshape(B, -1, 16, 32)  # E50: geo self-attn on fused
-            sc, sh = self.film(kv4.mean(1)).chunk(2, -1)        # E63: FiLM — global audio modulates coarse layout
-            m16 = m16 * (1 + sc[..., None, None]) + sh[..., None, None]
             d_c = torch.sigmoid(self.coarse_head(m16))          # (B,1,16,32) coarse layout
             x = self.lsa32(self.refine32(self.up(m16) + F32 + torch.sigmoid(self.g3(F32)) * self.se3(e3)))   # 32x64
             x = self.lsa64(self.refine64(self.up(x) + F64 + torch.sigmoid(self.g2(F64)) * self.se2(e2)))     # 64x128
@@ -875,8 +871,8 @@ def parse_args():
                         '2=log-mag binaural; 3=[logL,logR,ILD]')
     p.add_argument('--flip-aug', type=lambda s: s == 'True', default=True,
                    help='L/R mirror augmentation (depth width-flip + channel-aware audio swap)')
-    p.add_argument('--raydpt-full-decode', type=lambda s: s == 'True', default=False,
-                   help='learned upsample 64x128->256x512 (+e1 skip) instead of bilinear x4')
+    p.add_argument('--raydpt-full-decode', type=lambda s: s == 'True', default=True,
+                   help='E64: learned upsample 64x128->256x512 (+e1 skip) instead of bilinear x4 — targets fine-detail RMSE')
     p.add_argument('--raydpt-lite', type=lambda s: s == 'True', default=False,
                    help='2-scale (32,64) lite RayDPT variant')
 

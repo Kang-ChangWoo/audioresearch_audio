@@ -84,7 +84,8 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E60 | E57 confirmation rerun | 0.3417 | 1.5074 | 0.5697 | confirm — CRITICAL: identical config 0.027 WORSE → true σ≈0.019, recent micro-wins were noise |
 | E61 | E57 + 2nd cross-attn round at m16 | 0.3382 | 1.4925 | 0.5717 | discard (0.011 worse, within noise; +complexity +budget) |
 | E62 | drop aux losses w_low=0 & w_coarse_layout=0 | 0.3333 | 1.5433 | 0.5572 | discard (0.070 WORSE — aux losses load-bearing for RMSE/d1; ABS_REL gamed) |
-| E63 | FiLM: global audio embedding modulates coarse layout m16 | running | | | — |
+| E63 | FiLM global-audio modulates m16 | 0.3483 | 1.5119 | 0.5700 | discard (0.034 worse, within noise; cross-attn already supplies audio) |
+| E64 | learned full-decode 64×128→256×512 (+e1 skip) — targets RMSE | running | | | — |
 
 ## Current champion & summary (~50 experiments)
 
