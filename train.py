@@ -264,7 +264,7 @@ class GeoSelfBlock(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.ffn = FFN(dim)                                      # E45 confirmed: SwiGLU no better (coarse block saturated)
         self.register_buffer("geom", geom)                       # (N,N,G) pairwise geom feats
-        self.bias_mlp = nn.Sequential(nn.Linear(geom.shape[-1], 32), nn.GELU(), nn.Linear(32, heads))
+        self.bias_mlp = nn.Sequential(nn.Linear(geom.shape[-1], 64), nn.GELU(), nn.Linear(64, heads))  # E58: wider hidden to exploit richer 5-feat geom
 
     def forward(self, q):
         B, N, C = q.shape
