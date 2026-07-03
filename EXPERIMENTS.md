@@ -82,7 +82,8 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E58 | E57 + wider geom bias_mlp (32→64) | 0.3437 | 1.5023 | 0.5725 | discard (loses 0.019; capacity overfits — geom features help, not bias_mlp width) |
 | E59 | E57 + 3rd post-fusion rsa16b block | — | — | — | discard (BUDGET BUST 560s>555s → 6 epochs; 2 blocks is the sweet spot) |
 | E60 | E57 confirmation rerun | 0.3417 | 1.5074 | 0.5697 | confirm — CRITICAL: identical config 0.027 WORSE → true σ≈0.019, recent micro-wins were noise |
-| E61 | E57 + 2nd cross-attn round at m16 (re-gather audio post-geo) | running | | | — |
+| E61 | E57 + 2nd cross-attn round at m16 | 0.3382 | 1.4925 | 0.5717 | discard (0.011 worse, within noise; +complexity +budget) |
+| E62 | drop aux losses w_low=0 & w_coarse_layout=0 (simplification probe) | running | | | — |
 
 ## Current champion & summary (~50 experiments)
 
