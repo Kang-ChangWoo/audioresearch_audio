@@ -83,7 +83,8 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E59 | E57 + 3rd post-fusion rsa16b block | — | — | — | discard (BUDGET BUST 560s>555s → 6 epochs; 2 blocks is the sweet spot) |
 | E60 | E57 confirmation rerun | 0.3417 | 1.5074 | 0.5697 | confirm — CRITICAL: identical config 0.027 WORSE → true σ≈0.019, recent micro-wins were noise |
 | E61 | E57 + 2nd cross-attn round at m16 | 0.3382 | 1.4925 | 0.5717 | discard (0.011 worse, within noise; +complexity +budget) |
-| E62 | drop aux losses w_low=0 & w_coarse_layout=0 (simplification probe) | running | | | — |
+| E62 | drop aux losses w_low=0 & w_coarse_layout=0 | 0.3333 | 1.5433 | 0.5572 | discard (0.070 WORSE — aux losses load-bearing for RMSE/d1; ABS_REL gamed) |
+| E63 | FiLM: global audio embedding modulates coarse layout m16 | running | | | — |
 
 ## Current champion & summary (~50 experiments)
 

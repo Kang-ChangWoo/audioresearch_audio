@@ -103,8 +103,8 @@ def make_config(args):
             coarse_head_h=16,
             coarse_head_w=32,
             w_dense=1.0,
-            w_coarse_layout=0.0,   # E62: drop both aux regularizers (simplification probe; E18's 1.0 was tuned under stale 0.005 noise)
-            w_low=0.0,
+            w_coarse_layout=1.0,   # E62 RE-CONFIRMED load-bearing: dropping both aux losses cost 0.070 composite (RMSE+d1 regress hard)
+            w_low=0.5,
             w_rel=0.1,    # confirmed optimal (E32 0.08, E40 0.13 both worse)
             w_grad=0.05,  # champion (E34): edge-loss sweet spot (0.03 & 0.1 both worse)
             w_silog=0.0,
@@ -413,6 +413,10 @@ class RayDPT(nn.Module):
                                     GeoSelfBlock(dim, heads, torch.from_numpy(geom16b.copy())))
         # E61 tried a 2nd cross-attn round here (re-gather audio post-geo) — within-noise worse + budget
         # pressure; reverted. Post-fusion geometry (rsa16b) is the ceiling of this subsystem.
+        # E63: FiLM — a GLOBAL audio embedding (mean-pooled audio tokens) modulates the coarse layout
+        # via per-channel scale+shift (a different conditioning path than the per-ray cross-attn).
+        self.film = nn.Sequential(nn.Linear(dim, dim), nn.GELU(), nn.Linear(dim, dim * 2))
+        nn.init.zeros_(self.film[-1].weight); nn.init.zeros_(self.film[-1].bias)   # start as identity
         # DPT encoder skips (U-Net detail injection)
         self.se4 = nn.Conv2d(ngf * 8, dim, 1)
         self.se3 = nn.Conv2d(ngf * 4, dim, 1)
@@ -463,6 +467,8 @@ class RayDPT(nn.Module):
             F64 = self._cross(self.rp64, self.rf64, self.cr64, kv4, B, 64, 128)
             m16 = F16 + torch.sigmoid(self.g4(F16)) * self.se4(e4)            # 16x32 (gated skip)
             m16 = self.rsa16b(m16.flatten(2).transpose(1, 2)).transpose(1, 2).reshape(B, -1, 16, 32)  # E50: geo self-attn on fused
+            sc, sh = self.film(kv4.mean(1)).chunk(2, -1)        # E63: FiLM — global audio modulates coarse layout
+            m16 = m16 * (1 + sc[..., None, None]) + sh[..., None, None]
             d_c = torch.sigmoid(self.coarse_head(m16))          # (B,1,16,32) coarse layout
             x = self.lsa32(self.refine32(self.up(m16) + F32 + torch.sigmoid(self.g3(F32)) * self.se3(e3)))   # 32x64
             x = self.lsa64(self.refine64(self.up(x) + F64 + torch.sigmoid(self.g2(F64)) * self.se2(e2)))     # 64x128
