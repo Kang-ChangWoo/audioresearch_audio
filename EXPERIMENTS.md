@@ -79,7 +79,8 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E55 | E54 + geo-aware pooled geo-attn at 32×64 | 0.3418 | 1.5084 | 0.5662 | discard (=tie E54, within noise; pooled adds nothing over lsa32) |
 | **E56** | **E54 + richer geom (cos-dist+elev) on post-fusion rsa16b** | **0.3410** | **1.4950** | **0.5745** | **KEEP — NEW CHAMPION (comp 2.115, beats E54 by 0.023; best-ever all 3, RMSE<1.50)** |
 | **E57** | **E56 + wrapped Δazimuth geom (5 feats)** | **0.3393** | **1.4920** | **0.5767** | **KEEP — NEW CHAMPION (comp 2.107, beats E56 by 0.008; best-ever all 3)** |
-| E58 | E57 + wider geom bias_mlp (hidden 32→64) | running | | | — |
+| E58 | E57 + wider geom bias_mlp (32→64) | 0.3437 | 1.5023 | 0.5725 | discard (loses 0.019; capacity overfits — geom features help, not bias_mlp width) |
+| E59 | E57 + 3rd post-fusion rsa16b block (richer-geom re-test) | running | | | — |
 
 ## Current champion & summary (~50 experiments)
 

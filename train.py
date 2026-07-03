@@ -264,7 +264,7 @@ class GeoSelfBlock(nn.Module):
         self.proj = nn.Linear(dim, dim)
         self.ffn = FFN(dim)                                      # E45 confirmed: SwiGLU no better (coarse block saturated)
         self.register_buffer("geom", geom)                       # (N,N,G) pairwise geom feats
-        self.bias_mlp = nn.Sequential(nn.Linear(geom.shape[-1], 64), nn.GELU(), nn.Linear(64, heads))  # E58: wider hidden to exploit richer 5-feat geom
+        self.bias_mlp = nn.Sequential(nn.Linear(geom.shape[-1], 32), nn.GELU(), nn.Linear(32, heads))  # E58 confirmed 32 optimal (64 overfits)
 
     def forward(self, q):
         B, N, C = q.shape
@@ -408,8 +408,10 @@ class RayDPT(nn.Module):
         geom16b = np.stack([cosd, np.broadcast_to(elf[:, None], (N, N)),
                             np.broadcast_to(elf[None, :], (N, N)),
                             np.cos(daz), np.sin(daz)], -1).astype(np.float32)   # (512,512,5)
-        self.rsa16b = nn.Sequential(GeoSelfBlock(dim, heads, torch.from_numpy(geom16b.copy())),
-                                    GeoSelfBlock(dim, heads, torch.from_numpy(geom16b.copy())))
+        # E59: re-test 3 blocks (E52's 3-block loss was on 1-feat geom + heavier E51 base; richer
+        # 5-feat geom on the lighter E54 base may now support more post-fusion depth).
+        self.rsa16b = nn.Sequential(*[GeoSelfBlock(dim, heads, torch.from_numpy(geom16b.copy()))
+                                      for _ in range(3)])
         # DPT encoder skips (U-Net detail injection)
         self.se4 = nn.Conv2d(ngf * 8, dim, 1)
         self.se3 = nn.Conv2d(ngf * 4, dim, 1)
