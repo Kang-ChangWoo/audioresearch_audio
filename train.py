@@ -381,8 +381,10 @@ class RayDPT(nn.Module):
         mk_rp = lambda: nn.Sequential(nn.Linear(fd, dim), nn.GELU(), nn.Linear(dim, dim))
         self.rp16, self.rp32, self.rp64 = mk_rp(), mk_rp(), mk_rp()
         # audio kv: e4 (512 tok), e3 (2048 tok). 64-scale reuses e4 (cheap global cue).
-        self.kv_e4 = nn.Linear(ngf * 8, dim)
-        self.kv_e3 = nn.Linear(ngf * 4, dim)
+        # E75: richer audio-token projection (Linear -> MLP) at the audio->ray interface — gives the
+        # audio keys/values a nonlinear transform before cross-attn (targets the audio->depth bottleneck).
+        self.kv_e4 = nn.Sequential(nn.Linear(ngf * 8, dim), nn.GELU(), nn.Linear(dim, dim))
+        self.kv_e3 = nn.Sequential(nn.Linear(ngf * 4, dim), nn.GELU(), nn.Linear(dim, dim))
         # E70 tried learned positional embeddings on the audio tokens — neutral (within noise); the conv
         # encoder already encodes position implicitly. Reverted.
         mk_cr = lambda: nn.ModuleList([CrossBlock(dim, heads) for _ in range(nL)])
@@ -873,7 +875,7 @@ def parse_args():
     p.add_argument('--lr', type=float, default=4e-4)   # E16 champion LR (4e-4 is the floor; 3e-4 U-turned worse)
     p.add_argument('--optimizer', type=str, default='AdamW', choices=['AdamW', 'Adam', 'SGD'])
     p.add_argument('--num-workers', type=int, default=16)
-    p.add_argument('--in-ch', type=int, default=3, choices=[2, 3, 5],   # E74: test if 3ch [logL,logR,ILD] ties 5ch (drop cosIPD/sinIPD phase feats — simpler input if tied)
+    p.add_argument('--in-ch', type=int, default=5, choices=[2, 3, 5],   # E74 confirmed 5ch optimal: dropping IPD phase feats cost 0.055 (phase encodes direction — load-bearing)
                    help='5=RIR spatial feature [logL,logR,ILD,cosIPD,sinIPD] (default); '
                         '2=log-mag binaural; 3=[logL,logR,ILD]')
     p.add_argument('--flip-aug', type=lambda s: s == 'True', default=True,
