@@ -766,7 +766,7 @@ def train(cfg):
               f'Time: {time.time()-t0:.1f}s LR: {scheduler.get_last_lr()[0]:.6f}')
 
         # --- Validation --- (evaluate & checkpoint the EMA weights, not the raw iterate)
-        if epoch > 4 or epoch == cfg.mode.epochs:   # E84: skip early-epoch evals (~120s) to fund a 10th training epoch (best model is always a late annealed epoch)
+        if epoch % cfg.mode.validation_iter == 0:   # E84 confirmed more-epochs saturated at 9 (10th epoch flat) — keep per-epoch eval
             raw_state = {k: v.detach().clone() for k, v in model.state_dict().items()}
             model.load_state_dict(ema)                  # swap in EMA weights for eval
             mean_errors, val_loss, vis_data = evaluate(
