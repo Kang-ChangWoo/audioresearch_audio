@@ -103,7 +103,8 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E79 | shorter warmup 1→0.5 epoch | 0.3443 | 1.4905 | 0.5759 | discard (0.015 worse; 1-epoch warmup optimal) |
 | E80 | SH-basis ray features (use_sh_pe=True) | 0.3450 | 1.4938 | 0.5770 | discard (neutral-worse 2.1119; xyz+Fourier PE sufficient) |
 | E81 | mic-position PE ray features (use_mic_pe=True) | 0.3416 | 1.4854 | 0.5779 | discard (neutral/tied 2.1023) |
-| E82 | Fourier bands 6→8 (richer ray-dir PE) | running | | | — |
+| E82 | Fourier bands 6→8 | 0.3478 | 1.4786 | 0.5735 | discard (within-noise worse 2.1121; 6 optimal — ALL levers exhausted) |
+| E83 | E65 confirmation rerun (4th; champion multi-run mean) | running | | | — |
 
 ## Current champion & summary (~50 experiments)
 
