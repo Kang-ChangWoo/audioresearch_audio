@@ -425,7 +425,7 @@ class RayDPT(nn.Module):
         self.se3 = nn.Conv2d(ngf * 4, dim, 1)
         self.se2 = nn.Conv2d(ngf * 2, dim, 1)
         # E29: gated DPT skips — the ray features gate how much encoder detail to admit per scale.
-        self.g4 = nn.Conv2d(dim, dim, 1); self.g3 = nn.Conv2d(dim, dim, 1); self.g2 = nn.Conv2d(dim, dim, 1)
+        self.g4 = nn.Conv2d(dim, dim, 1); self.g3 = nn.Conv2d(dim, dim, 1)   # E86: dropped dead g2 (unused since E65 removed F64's 64-scale gated skip)
         self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
         self.refine32 = Refine(dim); self.refine64 = Refine(dim)
         self.lsa32 = LocalSphericalAttention(dim, heads, 32, 64, getattr(cfg, "raydpt_win32", 5))
