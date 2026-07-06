@@ -297,22 +297,24 @@ class UNet8Encoder(nn.Module):
 
 
 # ---- local spherical window attention (ray <-> ray) -------------------------
-def _window_kv(t, win):
-    """(B,C,H,W) -> (B,C,win*win,H,W): neighbours via circular-W / replicate-H pad."""
-    pad = win // 2
+def _window_kv(t, win, dilation=1):
+    """(B,C,H,W) -> (B,C,win*win,H,W): neighbours via circular-W / replicate-H pad.
+    E112: `dilation` spaces the taps out to enlarge the receptive field at IDENTICAL compute
+    (same win*win tap count) — F.unfold samples every `dilation`-th neighbour."""
+    pad = (win // 2) * dilation
     t = torch.cat([t[..., -pad:], t, t[..., :pad]], dim=-1)        # circular azimuth wrap
     t = F.pad(t, (0, 0, pad, pad), mode="replicate")               # replicate elevation (poles)
     B, C, Hp, Wp = t.shape
-    H, W = Hp - 2 * pad, Wp - 2 * pad
-    cols = F.unfold(t, kernel_size=win)                            # (B, C*win*win, H*W)
-    return cols.view(B, C, win * win, H, W)
+    cols = F.unfold(t, kernel_size=win, dilation=dilation)         # (B, C*win*win, H*W)
+    return cols.view(B, C, win * win, Hp - 2 * pad, Wp - 2 * pad)
 
 
-def _geom_bias_feats(H, W, win):
-    """(H, win*win, 3): [wrapped dtheta, dphi, cos angular distance] per row/offset."""
-    pad = win // 2
+def _geom_bias_feats(H, W, win, dilation=1):
+    """(H, win*win, 3): [wrapped dtheta, dphi, cos angular distance] per row/offset.
+    Tap offsets scale with `dilation` so the geometry bias reflects the true (wider) spacing."""
     el = (math.pi / 2 - (torch.arange(H).float() + 0.5) / H * math.pi)     # (H,)
-    offs = [(dr, dc) for dr in range(-pad, pad + 1) for dc in range(-pad, pad + 1)]
+    taps = [(k - win // 2) * dilation for k in range(win)]
+    offs = [(dr, dc) for dr in taps for dc in taps]
     out = torch.zeros(H, len(offs), 3)
     dphi_u, dth_u = math.pi / H, 2 * math.pi / W
     for h in range(H):
@@ -327,20 +329,20 @@ def _geom_bias_feats(H, W, win):
 
 
 class LocalSphericalAttention(nn.Module):
-    def __init__(self, dim, heads, H, W, win=5):
+    def __init__(self, dim, heads, H, W, win=5, dilation=1):
         super().__init__()
-        self.h, self.dh, self.win = heads, dim // heads, win
+        self.h, self.dh, self.win, self.dil = heads, dim // heads, win, dilation
         self.scale = self.dh ** -0.5
         self.to_qkv = nn.Conv2d(dim, dim * 3, 1)
         self.proj = nn.Conv2d(dim, dim, 1)
-        self.register_buffer("geom", _geom_bias_feats(H, W, win))          # (H,K,3)
+        self.register_buffer("geom", _geom_bias_feats(H, W, win, dilation))  # (H,K,3)
         self.bias_mlp = nn.Sequential(nn.Linear(3, 64), nn.GELU(), nn.Linear(64, heads))
 
     def forward(self, x):
         B, C, H, W = x.shape
         q, k, v = self.to_qkv(x).chunk(3, 1)
-        kw = _window_kv(k, self.win).view(B, self.h, self.dh, self.win * self.win, H, W)
-        vw = _window_kv(v, self.win).view(B, self.h, self.dh, self.win * self.win, H, W)
+        kw = _window_kv(k, self.win, self.dil).view(B, self.h, self.dh, self.win * self.win, H, W)
+        vw = _window_kv(v, self.win, self.dil).view(B, self.h, self.dh, self.win * self.win, H, W)
         q = q.view(B, self.h, self.dh, H, W)
         attn = torch.einsum("bndhw,bndkhw->bnkhw", q, kw) * self.scale     # (B,nh,K,H,W)
         bias = self.bias_mlp(self.geom).permute(2, 1, 0)                   # (nh,K,H)
@@ -357,7 +359,16 @@ class RayDPT(nn.Module):
         self.H, self.W = cfg.img_h, cfg.img_w
         ngf = getattr(cfg, "ngf", 64); dim = cfg.dim; heads = cfg.n_heads
         nL = getattr(cfg, "ray_cross_layers", 2)
-        self.enc = UNet8Encoder(getattr(cfg, "in_ch", 2), ngf)
+        # E109: CoordConv — append normalized row (=frequency) & col (=time-of-arrival/delay)
+        # coordinate channels to the encoder input. Physically: the time axis encodes delay↔distance
+        # (path = c·delay) and frequency is NOT translation-invariant (material/harmonic cues are
+        # freq-specific), yet the plain conv encoder is translation-equivariant with no absolute
+        # coordinate. This makes every conv layer delay- & freq-aware from layer 1 (distinct from
+        # E70/E80/E81 which added positional info POST-encoder on tokens/rays — all neutral).
+        rr = torch.linspace(-1, 1, self.H).view(1, 1, self.H, 1).expand(1, 1, self.H, self.W)
+        cc = torch.linspace(-1, 1, self.W).view(1, 1, 1, self.W).expand(1, 1, self.H, self.W)
+        self.register_buffer("coord", torch.cat([rr, cc], dim=1))    # (1,2,H,W)
+        self.enc = UNet8Encoder(getattr(cfg, "in_ch", 2) + 2, ngf)
 
         def bank(h, w):
             pc = copy.copy(cfg); pc.img_h, pc.img_w = h, w
@@ -375,12 +386,6 @@ class RayDPT(nn.Module):
         # encoder already encodes position implicitly. Reverted.
         mk_cr = lambda: nn.ModuleList([CrossBlock(dim, heads) for _ in range(nL)])
         self.cr16, self.cr32 = mk_cr(), mk_cr()   # E87: cr64 dropped (F64 removed in E65) — ~0.9M dead params
-        # E111: coarse->fine LAYOUT cross-attn — the 32x64 fine rays cross-attend the 512 geo-reasoned
-        # m16 tokens, so each fine ray SELECTIVELY reads the assembled global room layout (richer than
-        # the uniform bilinear-upsample additive skip). Extends the winning "geometric reasoning over
-        # the assembled layout" axis (E50-E57) to finer scale. Distinct from E61 (re-read audio) / E43
-        # (inject scalar d_c). Cheap: 2048 queries x 512 keys < the existing cr32's 2048x2048.
-        self.c2f = CrossBlock(dim, heads)
         # E22: ray<->ray global self-attn on the 16x32 coarse grid (512 tokens) so the layout rays
         # reason jointly after reading audio. Capacity saturates (E23 depth, E25 heads, E26 mid-scale).
         # E27: make it GEOMETRY-AWARE — add a learned bias on the cos angular distance between ray
@@ -420,8 +425,12 @@ class RayDPT(nn.Module):
         self.g4 = nn.Conv2d(dim, dim, 1); self.g3 = nn.Conv2d(dim, dim, 1)   # E86: dropped dead g2 (unused since E65 removed F64's 64-scale gated skip)
         self.up = nn.Upsample(scale_factor=2, mode="bilinear", align_corners=False)
         self.refine32 = Refine(dim); self.refine64 = Refine(dim)
-        self.lsa32 = LocalSphericalAttention(dim, heads, 32, 64, getattr(cfg, "raydpt_win32", 5))
-        self.lsa64 = LocalSphericalAttention(dim, heads, 64, 128, getattr(cfg, "raydpt_win64", 3))
+        # E112: dilation=2 on both local spherical-attn blocks — doubles the receptive field at
+        # IDENTICAL compute (same tap count). Tests whether local ray<->ray attention is receptive-
+        # field-limited (walls/floors span many pixels) rather than tap-count-limited (E41: larger
+        # dense window too costly; dilation gets the range for free).
+        self.lsa32 = LocalSphericalAttention(dim, heads, 32, 64, getattr(cfg, "raydpt_win32", 5), dilation=2)
+        self.lsa64 = LocalSphericalAttention(dim, heads, 64, 128, getattr(cfg, "raydpt_win64", 3), dilation=2)
         self.coarse_head = nn.Conv2d(dim, 1, 1)
         self.head = nn.Sequential(conv_bn(dim, ngf), conv_bn(ngf, ngf), nn.Conv2d(ngf, 1, 3, 1, 1))
         # E66 tried a learned 128x256 decode — RMSE got WORSE (1.485 vs 1.480); resolution is NOT the
@@ -447,6 +456,7 @@ class RayDPT(nn.Module):
 
     def forward(self, spec, coarse_feat=None, sh_basis=None):
         B = spec.size(0)
+        spec = torch.cat([spec, self.coord.expand(B, -1, -1, -1)], dim=1)   # E109: CoordConv channels
         e1 = self.enc.e1(spec); e2 = self.enc.e2(e1); e3 = self.enc.e3(e2); e4 = self.enc.e4(e3)
         kv4 = self.kv_e4(e4.flatten(2).transpose(1, 2))        # (B,512,dim)
         if self.lite:
@@ -467,10 +477,7 @@ class RayDPT(nn.Module):
             m16 = F16 + torch.sigmoid(self.g4(F16)) * self.se4(e4)            # 16x32 (gated skip)
             m16 = self.rsa16b(m16.flatten(2).transpose(1, 2)).transpose(1, 2).reshape(B, -1, 16, 32)  # E50: geo self-attn on fused
             d_c = torch.sigmoid(self.coarse_head(m16))          # (B,1,16,32) coarse layout
-            x32 = self.up(m16) + F32 + torch.sigmoid(self.g3(F32)) * self.se3(e3)   # 32x64
-            m16_tok = m16.flatten(2).transpose(1, 2)            # (B,512,dim) reasoned coarse layout
-            x32 = self.c2f(x32.flatten(2).transpose(1, 2), m16_tok).transpose(1, 2).reshape(B, -1, 32, 64)  # E111
-            x = self.lsa32(self.refine32(x32))                  # 32x64
+            x = self.lsa32(self.refine32(self.up(m16) + F32 + torch.sigmoid(self.g3(F32)) * self.se3(e3)))   # 32x64
             x = self.lsa64(self.refine64(self.up(x) + self.se2(e2)))     # 64x128 (E65: F64 dropped)
         if self.full_decode:                                   # LEARNED upsample 64x128 -> 256x512
             xf = self.up(self.proj_fd(x))                       # 128x256, ngf
@@ -727,15 +734,6 @@ def train(cfg):
                     spec[fm] = swap_audio_lr(spec[fm])
                     gt[fm] = torch.flip(gt[fm], dims=[-1])
                     mask[fm] = torch.flip(mask[fm], dims=[-1])
-            # E108: input LEVEL-JITTER aug — random common gain on the log-mag channels (lmag,rmag)
-            # = simulated mic-gain variation. ILD (ch2) & IPD (ch3,4) are gain-invariant so left
-            # UNTOUCHED (preserves the load-bearing directional phase feats, E74). Split is by SCENE
-            # (72 train->9 unseen val rooms), so this tests whether absolute level is an
-            # overfit-to-training-rooms nuisance (helps room-generalization) or a real depth cue.
-            if spec.size(1) >= 2:
-                gain = (torch.rand(spec.size(0), 1, 1, 1, device=device) * 2 - 1) * 0.3
-                spec = spec.clone()
-                spec[:, 0:2] = spec[:, 0:2] + gain
             optimizer.zero_grad()
             with torch.amp.autocast('cuda', dtype=torch.bfloat16):
                 out = model(spec)
