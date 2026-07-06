@@ -108,6 +108,7 @@ def make_config(args):
             w_rel=0.1,    # confirmed optimal (E32 0.08, E40 0.13 both worse)
             w_grad=0.05,  # champion (E34): edge-loss sweet spot (0.03 & 0.1 both worse)
             w_silog=0.0,
+            w_d1=0.1,     # E110: soft-d1 hinge — put gradient only on pixels OUTSIDE the 1.25x ratio band
         ),
         mode=Cfg(
             mode=args.mode,
@@ -357,16 +358,7 @@ class RayDPT(nn.Module):
         self.H, self.W = cfg.img_h, cfg.img_w
         ngf = getattr(cfg, "ngf", 64); dim = cfg.dim; heads = cfg.n_heads
         nL = getattr(cfg, "ray_cross_layers", 2)
-        # E109: CoordConv — append normalized row (=frequency) & col (=time-of-arrival/delay)
-        # coordinate channels to the encoder input. Physically: the time axis encodes delay↔distance
-        # (path = c·delay) and frequency is NOT translation-invariant (material/harmonic cues are
-        # freq-specific), yet the plain conv encoder is translation-equivariant with no absolute
-        # coordinate. This makes every conv layer delay- & freq-aware from layer 1 (distinct from
-        # E70/E80/E81 which added positional info POST-encoder on tokens/rays — all neutral).
-        rr = torch.linspace(-1, 1, self.H).view(1, 1, self.H, 1).expand(1, 1, self.H, self.W)
-        cc = torch.linspace(-1, 1, self.W).view(1, 1, 1, self.W).expand(1, 1, self.H, self.W)
-        self.register_buffer("coord", torch.cat([rr, cc], dim=1))    # (1,2,H,W)
-        self.enc = UNet8Encoder(getattr(cfg, "in_ch", 2) + 2, ngf)
+        self.enc = UNet8Encoder(getattr(cfg, "in_ch", 2), ngf)
 
         def bank(h, w):
             pc = copy.copy(cfg); pc.img_h, pc.img_w = h, w
@@ -450,7 +442,6 @@ class RayDPT(nn.Module):
 
     def forward(self, spec, coarse_feat=None, sh_basis=None):
         B = spec.size(0)
-        spec = torch.cat([spec, self.coord.expand(B, -1, -1, -1)], dim=1)   # E109: CoordConv channels
         e1 = self.enc.e1(spec); e2 = self.enc.e2(e1); e3 = self.enc.e3(e2); e4 = self.enc.e4(e3)
         kv4 = self.kv_e4(e4.flatten(2).transpose(1, 2))        # (B,512,dim)
         if self.lite:
@@ -548,6 +539,15 @@ def composite_loss(out, gt, mask, mcfg):
         ld = ((torch.log(out["D"].clamp(min=1e-3)) - torch.log(gt.clamp(min=1e-3))).abs() * mask).sum() \
              / mask.sum().clamp(min=1e-6)
         loss = loss + wl * ld
+    # E110: soft-d1 hinge — directly targets the honest d1 metric (max(D/gt,gt/D)<1.25, i.e.
+    # |log(D/gt)|<log 1.25). Unlike E46's plain log-L1 (which keeps refining already-correct pixels,
+    # neutral), the hinge relu(|log ratio|-log1.25) gives gradient ONLY to pixels OUTSIDE the band,
+    # pushing near-misses across the 1.25x threshold. Aimed at the composite's dominant term.
+    wd1 = getattr(mcfg, "w_d1", 0.0)
+    if wd1:
+        lr_ratio = (torch.log(out["D"].clamp(min=1e-3)) - torch.log(gt.clamp(min=1e-3))).abs()
+        hinge = (F.relu(lr_ratio - math.log(1.25)) * mask).sum() / mask.sum().clamp(min=1e-6)
+        loss = loss + wd1 * hinge
     # E33: edge-aware gradient-matching — match horizontal/vertical depth differences so predicted
     # depth EDGES land where the gt edges are (sharper boundaries -> better RMSE/d1). Masked to
     # valid pairs. w_grad=0 recovers the prior objective.
@@ -728,6 +728,15 @@ def train(cfg):
                     spec[fm] = swap_audio_lr(spec[fm])
                     gt[fm] = torch.flip(gt[fm], dims=[-1])
                     mask[fm] = torch.flip(mask[fm], dims=[-1])
+            # E108: input LEVEL-JITTER aug — random common gain on the log-mag channels (lmag,rmag)
+            # = simulated mic-gain variation. ILD (ch2) & IPD (ch3,4) are gain-invariant so left
+            # UNTOUCHED (preserves the load-bearing directional phase feats, E74). Split is by SCENE
+            # (72 train->9 unseen val rooms), so this tests whether absolute level is an
+            # overfit-to-training-rooms nuisance (helps room-generalization) or a real depth cue.
+            if spec.size(1) >= 2:
+                gain = (torch.rand(spec.size(0), 1, 1, 1, device=device) * 2 - 1) * 0.3
+                spec = spec.clone()
+                spec[:, 0:2] = spec[:, 0:2] + gain
             optimizer.zero_grad()
             with torch.amp.autocast('cuda', dtype=torch.bfloat16):
                 out = model(spec)
