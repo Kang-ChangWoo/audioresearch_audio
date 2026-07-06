@@ -718,6 +718,15 @@ def train(cfg):
                     spec[fm] = swap_audio_lr(spec[fm])
                     gt[fm] = torch.flip(gt[fm], dims=[-1])
                     mask[fm] = torch.flip(mask[fm], dims=[-1])
+            # E108: input LEVEL-JITTER aug — random common gain on the log-mag channels (lmag,rmag)
+            # = simulated mic-gain variation. ILD (ch2) & IPD (ch3,4) are gain-invariant so left
+            # UNTOUCHED (preserves the load-bearing directional phase feats, E74). Split is by SCENE
+            # (72 train->9 unseen val rooms), so this tests whether absolute level is an
+            # overfit-to-training-rooms nuisance (helps room-generalization) or a real depth cue.
+            if spec.size(1) >= 2:
+                gain = (torch.rand(spec.size(0), 1, 1, 1, device=device) * 2 - 1) * 0.3
+                spec = spec.clone()
+                spec[:, 0:2] = spec[:, 0:2] + gain
             optimizer.zero_grad()
             with torch.amp.autocast('cuda', dtype=torch.bfloat16):
                 out = model(spec)
