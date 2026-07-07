@@ -108,7 +108,6 @@ def make_config(args):
             w_rel=0.1,    # confirmed optimal (E32 0.08, E40 0.13 both worse)
             w_grad=0.05,  # champion (E34): edge-loss sweet spot (0.03 & 0.1 both worse)
             w_silog=0.0,
-            w_mid=0.5,    # E119: deep-supervision weight on the 64x128 depth head
         ),
         mode=Cfg(
             mode=args.mode,
@@ -183,16 +182,23 @@ class RayBank:
 # Model building blocks
 # ============================================================
 
+def _norm(c):
+    # E120: GroupNorm (batch-independent) replaces BatchNorm — computes stats per-instance identically
+    # at train & eval, so it removes the EMA-eval vs BN-running-stat mismatch and tends to generalize
+    # better to the unseen-room distribution. All channel counts here are divisible by 32.
+    return nn.GroupNorm(min(32, c), c)
+
+
 def conv_bn(ci, co, k=3, s=1, p=1):
     return nn.Sequential(nn.Conv2d(ci, co, k, s, p, bias=False),
-                         nn.BatchNorm2d(co), nn.GELU())
+                         _norm(co), nn.GELU())
 
 
 class Refine(nn.Module):
     def __init__(self, ch):
         super().__init__()
         self.body = nn.Sequential(conv_bn(ch, ch),
-                                  nn.Conv2d(ch, ch, 3, 1, 1, bias=False), nn.BatchNorm2d(ch))
+                                  nn.Conv2d(ch, ch, 3, 1, 1, bias=False), _norm(ch))
         self.act = nn.GELU()
 
     def forward(self, x):
@@ -274,7 +280,7 @@ class Down(nn.Module):
         super().__init__()
         layers = [nn.Conv2d(ci, co, 4, 2, 1, bias=not norm)]
         if norm:
-            layers.append(nn.BatchNorm2d(co))
+            layers.append(_norm(co))            # E120: GroupNorm instead of BatchNorm
         layers.append(nn.LeakyReLU(0.2))
         self.net = nn.Sequential(*layers)
 
@@ -416,7 +422,6 @@ class RayDPT(nn.Module):
         self.lsa32 = LocalSphericalAttention(dim, heads, 32, 64, getattr(cfg, "raydpt_win32", 5))
         self.lsa64 = LocalSphericalAttention(dim, heads, 64, 128, getattr(cfg, "raydpt_win64", 3))
         self.coarse_head = nn.Conv2d(dim, 1, 1)
-        self.mid_head = nn.Conv2d(dim, 1, 1)   # E119: deep-supervision head at the 64x128 ray features
         self.head = nn.Sequential(conv_bn(dim, ngf), conv_bn(ngf, ngf), nn.Conv2d(ngf, 1, 3, 1, 1))
         # E66 tried a learned 128x256 decode — RMSE got WORSE (1.485 vs 1.480); resolution is NOT the
         # bottleneck (depth field smooth, bilinear adequate). Reverted. Accuracy is audio->depth-limited.
@@ -463,7 +468,6 @@ class RayDPT(nn.Module):
             d_c = torch.sigmoid(self.coarse_head(m16))          # (B,1,16,32) coarse layout
             x = self.lsa32(self.refine32(self.up(m16) + F32 + torch.sigmoid(self.g3(F32)) * self.se3(e3)))   # 32x64
             x = self.lsa64(self.refine64(self.up(x) + self.se2(e2)))     # 64x128 (E65: F64 dropped)
-        d_mid = torch.sigmoid(self.mid_head(x))                # E119: deep supervision at 64x128
         if self.full_decode:                                   # LEARNED upsample 64x128 -> 256x512
             xf = self.up(self.proj_fd(x))                       # 128x256, ngf
             xf = self.dec1(xf + self.se1(e1))                  # + e1 skip
@@ -472,7 +476,7 @@ class RayDPT(nn.Module):
         else:
             D = torch.sigmoid(self.head(x))
             D = F.interpolate(D, (self.H, self.W), mode="bilinear", align_corners=False)
-        return {"D": D, "D0": D, "extras": {"D_coarse": d_c, "D_mid": d_mid}}
+        return {"D": D, "D0": D, "extras": {"D_coarse": d_c}}
 
 
 def build_model(cfg):
@@ -561,15 +565,6 @@ def composite_loss(out, gt, mask, mcfg):
         lc = masked_mae(F.adaptive_avg_pool2d(out["D"], (chh, chw)), gt_c, m_c)
     ll = masked_mae(gaussian_blur_erp(out["D"], 3.0), gaussian_blur_erp(gt, 3.0), mask)
     loss = loss + mcfg.w_coarse_layout * lc + mcfg.w_low * ll
-    # E119: deep supervision — a direct MAE loss on the 64x128 ray features (finest ray-conditioned
-    # scale, currently supervised only indirectly via the final head). Improves multi-scale gradient
-    # flow. gt/mask pooled to 64x128; cheap (1x1 head + one pooled MAE).
-    wm = getattr(mcfg, "w_mid", 0.0)
-    dmid = out["extras"].get("D_mid")
-    if wm and dmid is not None:
-        mh, mw = dmid.shape[-2:]
-        l_mid = masked_mae(dmid, F.adaptive_avg_pool2d(gt, (mh, mw)), F.adaptive_avg_pool2d(mask, (mh, mw)))
-        loss = loss + wm * l_mid
     return loss, {"mae": float(main.detach()), "rel": float(rel.detach()),
                   "lc": float(lc.detach()), "llow": float(ll.detach())}
 
