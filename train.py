@@ -182,23 +182,16 @@ class RayBank:
 # Model building blocks
 # ============================================================
 
-def _norm(c):
-    # E120: GroupNorm (batch-independent) replaces BatchNorm — computes stats per-instance identically
-    # at train & eval, so it removes the EMA-eval vs BN-running-stat mismatch and tends to generalize
-    # better to the unseen-room distribution. All channel counts here are divisible by 32.
-    return nn.GroupNorm(min(32, c), c)
-
-
 def conv_bn(ci, co, k=3, s=1, p=1):
     return nn.Sequential(nn.Conv2d(ci, co, k, s, p, bias=False),
-                         _norm(co), nn.GELU())
+                         nn.BatchNorm2d(co), nn.GELU())
 
 
 class Refine(nn.Module):
     def __init__(self, ch):
         super().__init__()
         self.body = nn.Sequential(conv_bn(ch, ch),
-                                  nn.Conv2d(ch, ch, 3, 1, 1, bias=False), _norm(ch))
+                                  nn.Conv2d(ch, ch, 3, 1, 1, bias=False), nn.BatchNorm2d(ch))
         self.act = nn.GELU()
 
     def forward(self, x):
@@ -280,7 +273,7 @@ class Down(nn.Module):
         super().__init__()
         layers = [nn.Conv2d(ci, co, 4, 2, 1, bias=not norm)]
         if norm:
-            layers.append(_norm(co))            # E120: GroupNorm instead of BatchNorm
+            layers.append(nn.BatchNorm2d(co))
         layers.append(nn.LeakyReLU(0.2))
         self.net = nn.Sequential(*layers)
 

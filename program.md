@@ -1,6 +1,6 @@
 # autoresearch
 
-This is an experiment to have the depth estimation network from echoes and FOA(first-order Ambisonics) do its own research.
+This is an experiment to have the depth estimation network from echoes do its own research.
 
 ## Setup
 
