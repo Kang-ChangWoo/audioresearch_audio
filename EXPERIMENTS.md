@@ -142,7 +142,9 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E117 | berHu on the low-pass term (llow) instead of MAE — capture berHu's strong RMSE lever (E38: 1.4746) confined to the low-freq/global term, avoiding the main-term frontier slide | 0.3546 | 1.4496 | 0.5759 | discard (2.0939; RMSE best-ever 1.4496 −0.023 but ABS_REL/d1 regress → frontier slide RELOCATED, net within-noise. berHu exhausted everywhere) |
 | E118 | Charbonnier (smooth-L1) main loss instead of MAE — near-optimum precision fix (grad→0 at r→0), keeps L1-far robustness (not a frontier slide) | 0.3454 | 1.4728 | 0.5780 | discard (2.0970, within noise, no frontier slide but no gain; MAE simpler — near-optimum precision not the bottleneck) |
 | E119 | deep supervision: MAE loss on a 64×128 depth head (finest ray-conditioned scale, w_mid=0.5) — improve multi-scale gradient flow | 0.3429 | 1.4788 | 0.5786 | discard (2.0976, within noise; decoder gradient flow not the bottleneck) |
-| E120 | GroupNorm instead of BatchNorm in all conv blocks — batch-independent norm removes EMA-eval/BN-running-stat mismatch, may generalize better to unseen rooms | running | | | — |
+| E120 | GroupNorm instead of BatchNorm in all conv blocks — batch-independent norm removes EMA-eval/BN-running-stat mismatch, may generalize better to unseen rooms | 0.3560 | 1.5294 | 0.5610 | discard (2.1771, +0.078 LARGE loss — BN running-stats are load-bearing here; GN also slower → only 9 epochs, under-annealed) |
+| **E121** | **geometry-aware coarse cross-attn (GeoCrossBlock cr16: learned angular-dist bias on ray-query × audio-token, both on 16×32 ERP grid)** — extends the productive geometry axis to the cross-attn subsystem | **0.3424** | **1.4708** | **0.5806** | **PROVISIONAL keep** (comp 2.0878, Δ−0.011 vs mean 2.099 — clears −0.005 rule but sits at best edge of champion draw dist 2.087–2.089; compute-neutral 379s/ep. Confirmation rerun E122 queued) |
+| E122 | E121 confirmation rerun (identical config) — rule out lucky draw before crowning geometry-cross-attn | running | | | — |
 
 ## Current champion & summary (~50 experiments)
 
