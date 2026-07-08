@@ -1,9 +1,16 @@
 {
   "_comment": "Active research state for Auto Audio Depth Estimation. One study = one structural hypothesis and its HPO/confirmation progression. When a study concludes, append a PASS/FAIL row to hypotheses.tsv, update archive.json, then open the next study. Adaptive-HPO ladder: structural-screen -> 3 -> 5 -> 7 -> 10, each extension justified by evidence. Never crown on <2-3 confirming draws (S10/E125 lesson).",
-  "next_exp_id": "E146",
-  "global_champion_commit": "828b9a3",
-  "global_champion_note": "NEW CHAMPION (S19): 10ch multi-resolution STFT (n_fft 512+128) + TTA, 3-draw mean 2.0639. Old TTA 5ch (494b5e2, 2.082) demoted to lineage champion. To revert to a 5ch experiment: set prepare.FEATURE_FN=None + in_ch=5.",
+  "next_exp_id": "E147",
+  "global_champion_commit": "93ef41b",
+  "global_champion_note": "NEW CHAMPION (S22): 11ch = multi-res STFT (512+128) + interaural coherence(512) + TTA, 3-draw mean 2.0417. Prior multi-res-10ch (828b9a3, 2.064) is lineage sub-champion. Revert-to-champion: current train.py at 93ef41b.",
   "concluded_studies": [
+    {
+      "study_id": "S22",
+      "lineage": "acoustic-representation-v2",
+      "conclusion": "PASS -> NEW GLOBAL CHAMPION",
+      "best_exp_id": "E143",
+      "note": "multi-res + interaural coherence (11ch). 3-draw mean 2.0417 (E143/E144/E145), all below multi-res-10ch best draw. Coherence = direct-vs-diffuse cue improves honest RMSE+d1. Commit 93ef41b."
+    },
     {
       "study_id": "S21",
       "lineage": "acoustic-representation-v2",
@@ -63,39 +70,28 @@
   ],
   "strategic_note": "BREAKTHROUGH on the acoustic-representation axis (PROPOSAL-01, operator-approved & implemented). After the whole train.py architecture space was exhausted (S10/S13/S14/S16 FAILed; TTA 5ch settled at 2.082), the representation held the real signal: multi-resolution STFT (S19) is the NEW CHAMPION at 2.064 (commit 828b9a3). Now mining this productive axis: S20 tunes the fine-block resolution (E140 n_fft=64 tied 128); next explore a 3rd resolution scale / cross-channel coherence / per-band echo processing. The prepare.FEATURE_FN seam is the live research surface.",
   "active_study": {
-    "study_id": "S22",
+    "study_id": "S23",
     "lineage": "acoustic-representation-v2",
-    "parent": "S19 (multi-res champion)",
-    "type": "new",
-    "status": "confirming",
-    "general_hypothesis": "More time-frequency RESOLUTION is now exhausted (S20/S21); the remaining representation headroom is a QUALITATIVELY new cue. Interaural COHERENCE separates direct/early sound (the two ears see a correlated wavefront) from diffuse late reverberation (decorrelated) - a direct-vs-diffuse ratio that encodes source distance and room size differently from the instantaneous ILD/IPD magnitude+phase cues.",
-    "detailed_hypothesis": "Add interaural magnitude-squared coherence |smooth(L conj R)|^2 / (smooth(|L|^2) smooth(|R|^2)) per TF bin (smooth = ~3-tap moving average over STFT frames) as extra channel(s) appended to the 10ch multi-res champion. Coherence is L/R-SYMMETRIC (invariant under L<->R swap), so it maps to identity under the mirror.",
-    "experiment_note": "E143: prepare.FEATURE_FN=multires_coh_feat (10ch champion + coherence at n_fft=512 -> 11ch); cfg.dataset.in_ch=11; GENERALIZE swap_lr_multi to swap leading 5ch blocks and pass trailing symmetric channels (coherence) through unchanged (identity), keeping flip-aug + TTA physically correct.",
-    "hpo_stage": "confirming-structural-screen",
+    "parent": "S22 (multi-res+coherence champion)",
+    "type": "refine",
+    "status": "running",
+    "general_hypothesis": "Coherence at the coarse 512 scale helped (S22); coherence is scale-dependent (the direct-vs-diffuse balance differs with analysis window), so adding coherence at the FINE 128 scale too - matching the multi-res two-scale design - may capture complementary direct/diffuse structure and improve further.",
+    "detailed_hypothesis": "Append a 2nd coherence channel computed at n_fft=128 (fine-time) alongside the existing n_fft=512 coherence -> 12ch (10 multi-res + 2 coherence).",
+    "experiment_note": "E146: multires_coh_feat appends _coherence_at(wav,128,40,128) as a 2nd trailing symmetric channel; cfg.dataset.in_ch=12; swap_lr_multi passes both trailing coherence channels as identity (12 = 2x5 blocks + 2 symmetric).",
+    "hpo_stage": "refine",
     "hpo_runs_used": 0,
     "runs": [
       {
-        "exp_id": "E143",
-        "status": "done",
-        "comp": 2.0447
-      },
-      {
-        "exp_id": "E144",
-        "status": "done",
-        "comp": 2.032,
-        "note": "2-draw mean 2.038, both far below champion best draw"
-      },
-      {
-        "exp_id": "E145",
+        "exp_id": "E146",
         "status": "running",
-        "note": "3rd draw for champion-change rigor"
+        "config": "coherence at 512 AND 128 -> 12ch"
       }
     ],
     "open_risks": [
-      "cosIPD already captures per-bin phase alignment; coherence adds the STABILITY of that alignment over time (direct vs diffuse) - genuinely new but the net may be small. Screen vs 2.064.",
-      "Correctness: coherence channel must be treated as SYMMETRIC under L/R swap in swap_lr_multi (identity), else TTA/flip-aug become physically wrong. Smoke-test the swap."
+      "Fine-scale (128) coherence has fewer freq bins + noisier per-bin estimates; may add little over the 512 coherence. Screen vs champion 2.042.",
+      "If it only ties, keep the simpler 11ch champion."
     ],
-    "decision_rule": "Screen vs champion 2.064. Clearly better (<2.058) + replicates -> new champion. Within noise -> coherence redundant with ILD/IPD; conclude. Worse -> drop. If it helps, add coherence at the 128 scale too (2 coherence channels) as a refine."
+    "decision_rule": "Screen vs champion 2.042. Clearly better (<2.036) + replicate -> new champion (12ch). Within noise -> single-scale coherence suffices, keep 11ch champion (93ef41b), revert. Then backlog: tune coherence smooth taps, per-band echo features, or if representation ideas plateau do a final champion multi-draw confirmation + project summary."
   },
   "backlog": [
     {

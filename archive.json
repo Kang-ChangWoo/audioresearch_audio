@@ -9,21 +9,21 @@
     "noise_sigma_small_sample": 0.014
   },
   "global_champion": {
-    "study_id": "S19",
+    "study_id": "S22",
     "lineage": "acoustic-representation-v2",
-    "exp_id": "E137",
-    "commit": "828b9a3",
-    "abs_rel": 0.3272,
-    "rmse": 1.4753,
-    "d1": 0.5877,
-    "composite_best_draw": 2.0595,
-    "composite_mean": 2.0639,
-    "draws": [2.0691, 2.0630, 2.0595],
-    "draws_note": "3 draws (E137/E138/E139) mean 2.0639 +-0.0040 (very tight), ALL below the old TTA champion best draw 2.072; Delta -0.018 (~2.3 sigma) below old champion mean 2.082. Improves ABS_REL (0.327 vs 0.338) + d1 (0.588 vs 0.582) with RMSE ~tied (1.475 vs 1.465).",
+    "exp_id": "E143",
+    "commit": "93ef41b",
+    "abs_rel": 0.3268,
+    "rmse": 1.4561,
+    "d1": 0.5922,
+    "composite_best_draw": 2.0320,
+    "composite_mean": 2.0417,
+    "draws": [2.0447, 2.0320, 2.0485],
+    "draws_note": "3 draws (E143/E144/E145) mean 2.0417 +-0.0071, ALL below the multi-res-10ch champion best draw 2.0595; Delta -0.022 below its mean 2.064. Coherence improves the HONEST metrics: RMSE ~1.456 (< 1.4645) and d1 ~0.592 (> 0.588), ABS_REL held.",
     "memory_gb": 17.0,
     "confirmed": true,
-    "representation": "10ch multi-resolution STFT = [n_fft512 5ch (fine frequency) | n_fft128 5ch (fine time / echo delay)] via prepare.FEATURE_FN=multires_feat, in_ch=10. STILL uses eval-time L/R-flip TTA (S12) + the fef2779/E116 architecture.",
-    "note": "NEW CHAMPION (2026-07). First gain beyond the architecture ceiling, from the PROPOSAL-01 acoustic-representation axis: adding fine-time-resolution echo-delay features. Old champion (TTA 5ch, 2.082) is now inference-time-tta lineage champion."
+    "representation": "11ch = [n_fft512 5ch (fine freq) | n_fft128 5ch (fine time) | interaural coherence(512) 1ch (direct-vs-diffuse)] via prepare.FEATURE_FN=multires_coh_feat, in_ch=11. Coherence is L/R-symmetric (swap_lr_multi passes it through). STILL uses eval-time L/R-flip TTA (S12) + fef2779/E116 architecture.",
+    "note": "NEW CHAMPION (2026-07). Second representation-axis win (PROPOSAL-01): interaural coherence adds a direct-vs-diffuse cue distinct from ILD/IPD. Progression: baseline 2.099-era -> TTA 2.082 -> multi-res STFT 2.064 -> +coherence 2.042. Prior multi-res-10ch (828b9a3, 2.064) now lineage sub-champion."
   },
   "lineage_champions": {
     "training-optimization": {"exp_id": "E16", "commit": "fef2779", "note": "bf16+bs32+lr4e-4+EMA0.995+cosine; the mapped optimisation envelope."},
@@ -34,7 +34,7 @@
     "depth-objective": {"exp_id": "E34", "note": "MAE + 0.1 rel + 0.05 grad + load-bearing coarse/low aux terms."},
     "simplification": {"exp_id": "E116", "commit": "fef2779", "note": "drop pix2pix encoder tail; 24.47->7.69M params, -69%, provably equivalent. Pre-TTA base champion."},
     "inference-time-tta": {"exp_id": "E127", "commit": "494b5e2", "note": "eval-time L/R-flip TTA (former global champion, 5-draw mean 2.082); still used ON TOP of the new multi-res representation champion."},
-    "acoustic-representation-v2": {"exp_id": "E137", "commit": "828b9a3", "note": "GLOBAL CHAMPION; 10ch multi-resolution STFT (n_fft 512+128), 3-draw mean 2.064. Fine-time echo-delay resolution."}
+    "acoustic-representation-v2": {"exp_id": "E143", "commit": "93ef41b", "note": "GLOBAL CHAMPION; 11ch = multi-res STFT (512+128) + interaural coherence(512), 3-draw mean 2.042. Sub-champion: multi-res-10ch E137/828b9a3 (2.064, no coherence)."}
   },
   "informative_failures": [
     {"study_id": "S18", "lineage": "acoustic-representation-v2", "exp_ids": "E136", "lesson": "Early/late echo-split (waveform split -> 10ch, 2.1247) is +0.043 worse: splitting the waveform truncates each block's STFT (less info/block) and the baseline single full-window STFT already spreads echo-timing across width W. The temporal axis is NOT the representation bottleneck. First study on the PROPOSAL-01 seam (which works)."},
