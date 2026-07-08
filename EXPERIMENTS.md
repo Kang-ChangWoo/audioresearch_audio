@@ -1,4 +1,9 @@
-# RayDPT Autoresearch — Experiment Findings
+# Auto Audio Depth Estimation — Experiment Findings
+
+*(Project: **Auto Audio Depth Estimation** / `auto-audio-depth-estimation`. Model: **RayDPT**. This is
+the running per-experiment log — historical entries below are preserved unchanged. Study-level
+conclusions and lineages now also live in `hypotheses.tsv` / `archive.json`; see `program.md` →
+"Research workflow (v2)".)*
 
 Audio → ERP radial depth (SoundSpaces, 256×512). Fixed **1-hour** training budget per run.
 Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Live log: `results.tsv`.

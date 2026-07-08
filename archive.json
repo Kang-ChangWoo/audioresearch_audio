@@ -1,0 +1,49 @@
+{
+  "_comment": "Auto Audio Depth Estimation - lightweight research archive. Champions are keyed by MECHANISM (lineage), not parameter values. results.tsv is the authoritative per-run log; this file records lineage-level state. Composite (honest) = rmse/1.6 + (1-d1)/0.46 + 0.3*abs_rel/0.4 (lower is better). Noise sigma ~= 0.008 (20+ reruns), up to ~0.014-0.019 on small samples; require >noise AND >=2-3 confirming draws before crowning.",
+  "metric": {
+    "composite": "rmse/1.6 + (1 - d1)/0.46 + 0.3 * abs_rel/0.4",
+    "honest_metrics": ["rmse", "d1"],
+    "gamed_metric": "abs_rel",
+    "note": "abs_rel is directly optimised by the relative loss term -> partly gameable; rank on the composite and never let a method win one metric while badly regressing the others.",
+    "noise_sigma_composite": 0.008,
+    "noise_sigma_small_sample": 0.014
+  },
+  "global_champion": {
+    "study_id": "S12",
+    "lineage": "inference-time-tta",
+    "exp_id": "E127",
+    "commit": "494b5e2",
+    "abs_rel": 0.3404,
+    "rmse": 1.4641,
+    "d1": 0.5824,
+    "composite_best_draw": 2.0720,
+    "composite_mean_3draw": 2.0791,
+    "draws": [2.0720, 2.0782, 2.0872],
+    "memory_gb": 16.9,
+    "confirmed": true,
+    "note": "Eval-time L/R-flip TTA on top of the fef2779 architecture. Deterministic honest ensembling; RMSE & d1 best-ever. This is the active train.py."
+  },
+  "lineage_champions": {
+    "training-optimization": {"exp_id": "E16", "commit": "fef2779", "note": "bf16+bs32+lr4e-4+EMA0.995+cosine; the mapped optimisation envelope."},
+    "coarse-ray-reasoning": {"exp_id": "E22", "note": "coarse 16x32 ray<->ray self-attn; first architectural win."},
+    "geometry-aware-reasoning": {"exp_id": "E27", "note": "cos-angular-distance bias on coarse self-attn."},
+    "post-fusion-geometry": {"exp_id": "E51", "note": "2 geo self-attn blocks on fused m16 (rsa16b); later E56/E57 gains found within noise (E60)."},
+    "decoder-fusion-skip-modulation": {"exp_id": "E65", "commit": "fef2779-lineage", "note": "gated skips + drop finest F64 cross-attn (big efficiency win)."},
+    "depth-objective": {"exp_id": "E34", "note": "MAE + 0.1 rel + 0.05 grad + load-bearing coarse/low aux terms."},
+    "simplification": {"exp_id": "E116", "commit": "fef2779", "note": "drop pix2pix encoder tail; 24.47->7.69M params, -69%, provably equivalent. Pre-TTA base champion."},
+    "inference-time-tta": {"exp_id": "E127", "commit": "494b5e2", "note": "GLOBAL CHAMPION; eval-time L/R-flip TTA."}
+  },
+  "informative_failures": [
+    {"study_id": "S10", "lineage": "geometry-cross-attn", "exp_ids": "E121-E125", "lesson": "Geometry bias on ray<->audio cross-attn is WITHIN NOISE of baseline; crowned on 2 lucky draws then demoted when the 3rd draw (E125) exposed it. Never crown sub-0.015 candidates on <3 draws."},
+    {"study_id": "S13", "lineage": "decode-paradigm", "exp_ids": "E130", "lesson": "Soft-argmax bin decode HURTS (d1 -0.014): the audio->depth field is smooth, so expectation-smoothing blurs it."},
+    {"study_id": "S07", "lineage": "acoustic-representation", "exp_ids": "E74,E108,E109", "lesson": "5ch cues are load-bearing; absolute level is a depth cue (do not jitter); explicit positional info is neutral-to-harmful. Deeper representation search is gated by prepare.py (PROPOSAL-01)."},
+    {"study_id": "S08", "lineage": "capacity-resolution", "exp_ids": "E64,E66,E68", "lesson": "Not capacity- or resolution-limited; heavy capacity busts the 1-hour budget."}
+  ],
+  "specialists": [
+    {"exp_id": "E38", "note": "berHu main loss: RMSE 1.4746 (strong) but ABS_REL/d1 sink -> a pure RMSE specialist / frontier slide, not a champion."},
+    {"exp_id": "E117", "note": "berHu on low-pass term: RMSE 1.4496 best-ever-RMSE but frontier-slides d1 -> RMSE specialist."}
+  ],
+  "recombination_candidates": [
+    {"idea": "equivariance-training (S14) x TTA (S12)", "rationale": "Training-side L/R equivariance may improve the base model that TTA ensembles; complementary if the base gain exceeds TTA's reduced marginal. Currently INTERRUPTED at E131 - resume and judge."}
+  ]
+}
