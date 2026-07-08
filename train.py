@@ -726,6 +726,14 @@ def train(cfg):
             with torch.amp.autocast('cuda', dtype=torch.bfloat16):
                 out = model(spec)
                 loss, parts = composite_loss(out, gt, mask, mcfg)
+                # E131: L/R-equivariance self-distillation. A stop-gradient "teacher" forward on the
+                # L/R-flipped input; penalise disagreement between the model's prediction and its own
+                # mirrored prediction. Makes the base model more L/R-equivariant (the symmetry TTA
+                # exploits at eval) -> better held-out-scene predictions. Extra no_grad forward (~+cost).
+                with torch.no_grad():
+                    D_t = torch.flip(model(swap_audio_lr(spec))["D"], dims=[-1])
+                cons = ((out["D"] - D_t).abs() * mask).sum() / mask.sum().clamp(min=1e-6)
+                loss = loss + 0.1 * cons
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             optimizer.step()
