@@ -148,7 +148,9 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E123 | extend geometry-aware cross-attn to the 32×64 scale (cr32 → GeoCrossBlock with geom32) — the natural next probe on the freshly-productive axis | crash | | | discard (BUDGET BUST: epoch 1 = 784s, ~660s steady vs champion 380s — manual 2048×2048 attn ×2 ~2× slower → ~5 epochs, under-anneals → auto-loses; killed ep1. Geometry-cross-attn win confined to the cheap 512-token coarse scale) |
 | E124 | 3rd geometry-aware cross block at cr16 (nL 2→3) — test whether the E50→E51 self-attn-depth pattern repeats for cross-attn | 0.3397 | 1.4847 | 0.5783 | discard (comp 2.0994; cr16 geometry depth saturates at 2, like vanilla E31; +0.44M params, no gain) |
 | **E125** | **3rd draw of the E121 geometry-cross-attn config (confirmation rerun)** | **0.3459** | **1.4820** | **0.5733** | ⚠️ **DISCONFIRMS E121** (comp **2.1132**, poor draw). 3 draws {2.0878, 2.0906, 2.1132} mean **2.0972** ≡ old baseline fef2779 (2.099, 20+ runs). Geometry-cross-attn is WITHIN NOISE → **champion reverted to fef2779** (simpler). E60 lesson repeats: never crown on 2 draws |
-| E126 | (staged) fresh probe from the fef2779 baseline | staged | | | — |
+| E126 | learnable register/summary KV tokens (K=8) on coarse cross-attn cr16 (learned prior scratchpad) | 0.3432 | 1.4733 | 0.5791 | discard (comp 2.0933, within-noise champion draw; learned prior scratchpad neutral, cf global-audio mapped E44/E63) |
+| **E127** | **eval-time L/R-flip TTA** (average prediction with mirrored-input prediction; deterministic honest ensembling over the horizontal symmetry the model is trained to respect) | **0.3404** | **1.4618** | **0.5846** | **PROVISIONAL KEEP — BIG WIN** (comp **2.0720**, Δ−0.027 vs mean & 0.015 below best-ever champion draw 2.087; ALL 3 metrics best-ever). Deterministic (not noise). prepare.py/compute_errors untouched. Confirmation rerun E128 queued |
+| E128 | E127 confirmation rerun (identical TTA code) | running | | | — |
 
 ## Current champion & summary (~125 experiments)
 
