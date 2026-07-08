@@ -159,9 +159,18 @@ Metric: `compute_errors` in `prepare.py` — **ABS_REL, RMSE, d1 (δ<1.25)**. Li
 | E129 | 3rd TTA confirmation draw — tighten the new champion's mean | 0.3430 | 1.4698 | 0.5808 | confirm (comp 2.0872; TTA 3-draw {2.0720, 2.0782, 2.0872} mean **2.079**±0.008, ~2.6σ below old champion 2.099 — win robust) |
 | E130 | soft-argmax / bin-expectation depth head (N=64 fixed bins, softmax → expectation) instead of direct sigmoid regression — radical decode paradigm (AdaBins-style), keeps ray-conditioning | running | | | — |
 
-## Current champion & summary (~128 experiments)
+## Current champion & summary (~140 experiments)
 
-Baseline **0.4434 / 1.5907 / 0.5236** → champion **E127/E128 TTA 0.3404 / 1.4641 / 0.5824** (comp **~2.075** 2-draw mean, commit `494b5e2`): **ABS_REL −23%, RMSE −8.0%, d1 +5.9 pts**. Both TTA draws (2.0720, 2.0782) sit BELOW the previous champion's entire draw range (2.087–2.114) → a real, replicated ~0.024 win. Noise σ≈0.008–0.014; only Δ clearing it **AND replicated by ≥2 reruns** is real (E121/E125 lesson: 2 lucky low draws are not a win — need ≥3 for sub-0.015 candidates).
+**CURRENT GLOBAL CHAMPION — S19 multi-resolution STFT (commit `828b9a3`, 3-draw mean comp `2.064`):**
+0.327 / 1.475 / 0.588. A 10ch representation = baseline 5ch (n_fft=512, fine frequency) + short-window
+5ch (n_fft=128, fine time) via the PROPOSAL-01 `prepare.FEATURE_FN` seam, on top of the TTA + fef2779
+architecture. Fine-time-resolution echo-delay features add real depth signal (distance ≈ echo arrival
+time) → the **first gain beyond the architecture ceiling**, found on the acoustic-representation axis
+after the whole `train.py` architecture space was exhausted. Confirmed over 3 draws (E137/E138/E139),
+all below the prior champion's entire distribution. Beats baseline: **ABS_REL −26%, RMSE −7.3%, d1 +6.4 pts**.
+
+Prior champion (now `inference-time-tta` lineage champion): **E127/E128 TTA 0.340 / 1.464 / 0.582**
+(comp ~2.082, commit `494b5e2`) — eval-time L/R-flip test-time augmentation, still used under the multi-res rep. Both TTA draws (2.0720, 2.0782) sit BELOW the previous champion's entire draw range (2.087–2.114) → a real, replicated ~0.024 win. Noise σ≈0.008–0.014; only Δ clearing it **AND replicated by ≥2 reruns** is real (E121/E125 lesson: 2 lucky low draws are not a win — need ≥3 for sub-0.015 candidates).
 
 **The two standing wins on top of the long-optimized architecture:**
 1. **E116 — drop the vestigial pix2pix encoder tail** (24.47→7.69M params, −69%, provably output-equivalent). Pure simplification.

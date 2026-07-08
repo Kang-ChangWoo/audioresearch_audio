@@ -9,20 +9,21 @@
     "noise_sigma_small_sample": 0.014
   },
   "global_champion": {
-    "study_id": "S12",
-    "lineage": "inference-time-tta",
-    "exp_id": "E127",
-    "commit": "494b5e2",
-    "abs_rel": 0.3404,
-    "rmse": 1.4641,
-    "d1": 0.5824,
-    "composite_best_draw": 2.0720,
-    "composite_mean": 2.0821,
-    "draws": [2.0720, 2.0782, 2.0872, 2.0935, 2.0796],
-    "draws_note": "5 confirmation draws (E127/E128/E129/E133/E135), mean 2.0821 +-0.0075, ~2 sigma below old baseline 2.099. Robustly settled final method (for the fixed 5ch representation baseline).",
-    "memory_gb": 16.9,
+    "study_id": "S19",
+    "lineage": "acoustic-representation-v2",
+    "exp_id": "E137",
+    "commit": "828b9a3",
+    "abs_rel": 0.3272,
+    "rmse": 1.4753,
+    "d1": 0.5877,
+    "composite_best_draw": 2.0595,
+    "composite_mean": 2.0639,
+    "draws": [2.0691, 2.0630, 2.0595],
+    "draws_note": "3 draws (E137/E138/E139) mean 2.0639 +-0.0040 (very tight), ALL below the old TTA champion best draw 2.072; Delta -0.018 (~2.3 sigma) below old champion mean 2.082. Improves ABS_REL (0.327 vs 0.338) + d1 (0.588 vs 0.582) with RMSE ~tied (1.475 vs 1.465).",
+    "memory_gb": 17.0,
     "confirmed": true,
-    "note": "Eval-time L/R-flip TTA on top of the fef2779 architecture. Deterministic honest ensembling; RMSE & d1 best-ever. This is the active train.py."
+    "representation": "10ch multi-resolution STFT = [n_fft512 5ch (fine frequency) | n_fft128 5ch (fine time / echo delay)] via prepare.FEATURE_FN=multires_feat, in_ch=10. STILL uses eval-time L/R-flip TTA (S12) + the fef2779/E116 architecture.",
+    "note": "NEW CHAMPION (2026-07). First gain beyond the architecture ceiling, from the PROPOSAL-01 acoustic-representation axis: adding fine-time-resolution echo-delay features. Old champion (TTA 5ch, 2.082) is now inference-time-tta lineage champion."
   },
   "lineage_champions": {
     "training-optimization": {"exp_id": "E16", "commit": "fef2779", "note": "bf16+bs32+lr4e-4+EMA0.995+cosine; the mapped optimisation envelope."},
@@ -32,7 +33,8 @@
     "decoder-fusion-skip-modulation": {"exp_id": "E65", "commit": "fef2779-lineage", "note": "gated skips + drop finest F64 cross-attn (big efficiency win)."},
     "depth-objective": {"exp_id": "E34", "note": "MAE + 0.1 rel + 0.05 grad + load-bearing coarse/low aux terms."},
     "simplification": {"exp_id": "E116", "commit": "fef2779", "note": "drop pix2pix encoder tail; 24.47->7.69M params, -69%, provably equivalent. Pre-TTA base champion."},
-    "inference-time-tta": {"exp_id": "E127", "commit": "494b5e2", "note": "GLOBAL CHAMPION; eval-time L/R-flip TTA."}
+    "inference-time-tta": {"exp_id": "E127", "commit": "494b5e2", "note": "eval-time L/R-flip TTA (former global champion, 5-draw mean 2.082); still used ON TOP of the new multi-res representation champion."},
+    "acoustic-representation-v2": {"exp_id": "E137", "commit": "828b9a3", "note": "GLOBAL CHAMPION; 10ch multi-resolution STFT (n_fft 512+128), 3-draw mean 2.064. Fine-time echo-delay resolution."}
   },
   "informative_failures": [
     {"study_id": "S18", "lineage": "acoustic-representation-v2", "exp_ids": "E136", "lesson": "Early/late echo-split (waveform split -> 10ch, 2.1247) is +0.043 worse: splitting the waveform truncates each block's STFT (less info/block) and the baseline single full-window STFT already spreads echo-timing across width W. The temporal axis is NOT the representation bottleneck. First study on the PROPOSAL-01 seam (which works)."},
