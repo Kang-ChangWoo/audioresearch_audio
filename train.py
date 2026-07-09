@@ -445,8 +445,12 @@ class RayDPT(nn.Module):
         # sees in_ch + raw_fe channels. raw_fe=0 (default) -> unchanged champion.
         self.raw_fe = getattr(cfg, "raw_fe_ch", 0) if getattr(cfg, "raw_frontend", False) else 0
         if self.raw_fe:
-            self.frontend = nn.Sequential(conv_bn(5, 32), conv_bn(32, 32),
-                                          nn.Conv2d(32, self.raw_fe, 3, 1, 1), nn.GELU())
+            last = nn.Conv2d(32, self.raw_fe, 3, 1, 1)
+            self.frontend = nn.Sequential(conv_bn(5, 32), conv_bn(32, 32), last, nn.GELU())
+            # E156: ZERO-INIT the last conv so the front-end outputs ~0 initially -> the model STARTS
+            # identical to the 12ch champion and learns to ADD native-resolution features only if they
+            # help (no random-channel dilution / optimisation disruption).
+            nn.init.zeros_(last.weight); nn.init.zeros_(last.bias)
         self.enc = UNet8Encoder(getattr(cfg, "in_ch", 2) + self.raw_fe, ngf)
 
         def bank(h, w):
