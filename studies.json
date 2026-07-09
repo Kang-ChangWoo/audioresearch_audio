@@ -1,9 +1,16 @@
 {
   "_comment": "Active research state for Auto Audio Depth Estimation. One study = one structural hypothesis and its HPO/confirmation progression. When a study concludes, append a PASS/FAIL row to hypotheses.tsv, update archive.json, then open the next study. Adaptive-HPO ladder: structural-screen -> 3 -> 5 -> 7 -> 10, each extension justified by evidence. Never crown on <2-3 confirming draws (S10/E125 lesson).",
-  "next_exp_id": "E154",
+  "next_exp_id": "E155",
   "global_champion_commit": "36c6538",
   "global_champion_note": "NEW CHAMPION (S23): 12ch = multi-res STFT (512+128) + interaural coherence at 512 AND 128 + TTA, 3-draw mean 2.0300. Progression 2.099->2.082(TTA)->2.064(multi-res)->2.042(+coh512)->2.030(+coh128). Current train.py at 36c6538.",
   "concluded_studies": [
+    {
+      "study_id": "S27",
+      "lineage": "acoustic-representation-v2",
+      "conclusion": "confirm",
+      "best_exp_id": "E146",
+      "note": "4th champion draw E153=2.0311 (best-ever RMSE 1.4482); 4-draw mean 2.0303 std 0.0016. Champion rock-solid."
+    },
     {
       "study_id": "S26",
       "lineage": "acoustic-representation-v2",
@@ -98,29 +105,28 @@
   ],
   "strategic_note": "PROJECT AT A STRONG, WELL-CHARACTERIZED FINAL RESULT. Champion = 12ch (multi-res STFT 512+128 + interaural coherence 512+128) + TTA, commit 36c6538, 3-draw mean 2.030. Progression 2.099->2.082(TTA)->2.064(multi-res)->2.042(+coh512)->2.030(+coh128); vs baseline ABS_REL -26% / RMSE ~-9% / d1 +7pts. BOTH major axes now mapped: architecture exhausted (E0-E126), acoustic representation mined (S19/S22/S23 wins; S18/S21/S24/S25/S26 all plateau/fail). Extension space (more scales/smoothing) and genuinely-new-cue space (onset) both saturated. Loop continues with FINAL champion confirmation draws to tighten the reported mean; a materially new gain would likely need new infra/data (learned STFT front-end in the model, a different backbone, or more scenes) beyond the current train.py+FEATURE_FN research surface.",
   "active_study": {
-    "study_id": "S27",
+    "study_id": "S28",
     "lineage": "acoustic-representation-v2",
     "parent": "S23 (12ch champion)",
-    "type": "confirm",
+    "type": "new",
     "status": "running",
-    "general_hypothesis": "Both research axes are mapped and the 12ch champion is the settled final method; add confirmation draws to tighten its reported mean (currently 3 draws, std 0.0018) and re-verify robustness.",
-    "detailed_hypothesis": "Re-run the exact 12ch champion (36c6538) for additional confirmation draws.",
-    "experiment_note": "E153: re-run champion 36c6538 unchanged; record as a 4th confirm draw of S23.",
-    "confirms": {
-      "study_id": "S23",
-      "exp_id": "E146",
-      "commit": "36c6538"
-    },
-    "hpo_stage": "n/a-confirm",
+    "general_hypothesis": "The winning magnitude-squared coherence weights phase stability by amplitude (ignoring noisy low-energy bins); interaural PHASE coherence (unweighted resultant length of exp(i*IPD)) measures phase stability independent of amplitude, which MIGHT expose direct/diffuse structure in bins the amplitude-weighted version discounts - or might just add low-SNR noise. Final genuine representation probe (low-EV but a real, distinct hypothesis, not churn).",
+    "detailed_hypothesis": "Add unweighted interaural phase coherence at n_fft=512 as an L/R-symmetric channel -> 13ch.",
+    "experiment_note": "E154: multires_coh_pcoh_feat = 12ch + _phasecoh_at(512), in_ch=13.",
+    "hpo_stage": "structural-screen",
     "hpo_runs_used": 0,
     "runs": [
       {
-        "exp_id": "E153",
+        "exp_id": "E154",
         "status": "running",
-        "note": "4th champion draw"
+        "config": "+phase-coherence(512) -> 13ch"
       }
     ],
-    "decision_rule": "Record the draw; update champion draws/mean in archive.json. The loop keeps running confirmation draws (and stays alert for any genuinely-new high-EV idea). This is the honest terminal state of a successful program, not a stop."
+    "open_risks": [
+      "Likely redundant with magnitude coherence (or noise-dominated in low-amp bins) + 13ch epoch penalty. Expect neutral/worse.",
+      "If it fails, that is the 4th representation fail -> representation axis CONCLUSIVELY saturated; stop probing cheap cues; recommend a bigger GATED swing (learned complex-STFT front-end in the model, needs a prepare.py change to pass raw STFT = PROPOSAL-02) or conclude at 2.030."
+    ],
+    "decision_rule": "Screen vs champion 2.030. Clearly better (<2.024)+replicate -> new champion. Else -> keep 12ch champion 36c6538, revert; representation conclusively saturated -> next real gain needs new infra (PROPOSAL-02) or the project concludes at its strong final result."
   },
   "backlog": [
     {

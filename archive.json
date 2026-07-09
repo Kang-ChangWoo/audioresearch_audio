@@ -20,13 +20,14 @@
     "rmse": 1.4525,
     "d1": 0.5967,
     "composite_best_draw": 2.0285,
-    "composite_mean": 2.03,
+    "composite_mean": 2.0303,
     "draws": [
       2.0289,
       2.0325,
-      2.0285
+      2.0285,
+      2.0311
     ],
-    "draws_note": "3 draws (E146/E147/E148) mean 2.0300 +-0.0018 (very tight), ALL below the 11ch champion best draw 2.0320; Delta -0.012 below its mean 2.042. Best-ever RMSE ~1.452 and d1 ~0.597.",
+    "draws_note": "4 draws (E146/E147/E148/E153) mean 2.0303 +-0.0016 (very tight); best-ever RMSE 1.4482 (E153). Settled final method.",
     "memory_gb": 17.0,
     "confirmed": true,
     "representation": "12ch = [n_fft512 5ch (fine freq) | n_fft128 5ch (fine time) | interaural coherence(512) | interaural coherence(128)] via prepare.FEATURE_FN=multires_coh_feat, in_ch=12. Both coherence channels L/R-symmetric. STILL uses eval-time L/R-flip TTA (S12) + fef2779/E116 architecture.",
