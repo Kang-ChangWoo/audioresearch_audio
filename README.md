@@ -43,14 +43,14 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 
 | When | Mode | Event | Note |
 |---|---|---|---|
+| 2026-07-10T03:42 | `synthesize` | discrepancy_recorded | Failed instrument: a training-free NN-retrieval probe intended to test I1 cheaply is INVALID -- its retrieval (rmse 2.20) is worse |
+| 2026-07-10T03:42 | `synthesize` | direction_changed | I1 probe REDESIGNED before spending GPU. The STFT's temporal resolution is set by the analysis WINDOW, not the hop: win=400 smears |
 | 2026-07-10T03:28 | `synthesize` | discrepancy_recorded | D3: E2's composite win over the 2ch cells is entirely a d1 win (0.5938 vs 0.5808); its RMSE (1.3207) is WORSE than E1's (1.3116) a |
 | 2026-07-10T03:26 | `synthesize` | candidate_dropped | I2 (decoder output resolution) REFUTED by an oracle diagnostic costing zero GPU. A PERFECT predictor at RayDPT's 64x128 decode res |
 | 2026-07-10T03:26 | `synthesize` | experiment_completed | batvision 5ch nolog: composite 1.8646 (rmse 1.3207, d1 0.5938, abs_rel 0.4460), best epoch 13/25. Beats both 2ch cells (1.8854, 1. |
 | 2026-07-10T03:24 | `synthesize` | study_opened | S1 (queued, exploit): E4 re-anchors RayDPT (my model) under the planar target. Prerequisite for every RayDPT improvement; nothing  |
 | 2026-07-10T03:24 | `synthesize` | study_opened | S2 (queued, explore): I1 temporal-resolution probe on the CHEAPEST parent (batvision, not the champion). Control is E2 (batvision_ |
 | 2026-07-10T03:19 | `synthesize` | infrastructure | Upgrade-plan section 15 (audio representation search-space): STFT analysis window moved from prepare.py module constants into cfg. |
-| 2026-07-10T03:20 | `synthesize` | infrastructure | Serial scored-evaluation lock added (utils/evallock.py). Our composite has no runtime term, but TIME_BUDGET is wall-clock, so over |
-| 2026-07-10T03:12 | `synthesize` | idea_added | Temporal resolution of the input (hop 160 -> 40). Causally FAR from the current decoder/attention lineage, grounded in sensing phy |
 
 *Updated by `python utils/report.py research`. Champion: none yet.*
 <!-- RESEARCH:END -->

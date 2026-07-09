@@ -8,6 +8,12 @@
 #
 # NOTE: no `set -u` -- conda's binutils activate hook reads unbound vars (ADDR2LINE).
 cd "$(dirname "$0")/.."
+
+# Single-instance guard: two queue runners would launch the same experiment twice and
+# fight over the GPU. flock is released by the kernel if this process dies.
+exec 200>out/.queue.lock
+flock -n 200 || { echo "[queue] another queue runner holds out/.queue.lock; exiting."; exit 0; }
+echo "[queue] single-instance lock acquired (pid $$)"
 source ~/miniconda3/etc/profile.d/conda.sh 2>/dev/null || source /opt/conda/etc/profile.d/conda.sh
 conda activate ss
 mkdir -p out/logs
@@ -31,12 +37,23 @@ run raydpt_e4_planar train.py
 # I1 probe -- acoustic-representation / temporal resolution, on the CHEAPEST parent
 # (batvision reference), NOT on the champion. Anti-anchoring: if finer time-of-flight
 # resolution is a real mechanism it must show up on the simplest model.
-# The control already exists: E2 = batvision_5ch_nolog at hop=160 (0.567 m depth quantum).
-# Falsification: RMSE must fall MONOTONICALLY across hop 160 -> 80 -> 40.
-#   hop 80 -> T=36 frames, 0.283 m quantum
-#   hop 40 -> T=71 frames, 0.142 m quantum
+#
+# DESIGN CORRECTION (before any GPU was spent): the STFT's temporal RESOLUTION is set by
+# the analysis WINDOW, not by the hop. The window's support smears an echo over
+# c*win/(2*sr) of one-way depth; the hop only controls how densely that smeared function
+# is sampled. At win=400 the smear is 1.417 m -- the same size as the achieved RMSE 1.3207 m.
+# Shrinking the hop alone leaves the smear at 1.417 m and merely oversamples.
+#
+# So the two arms DISSOCIATE sampling density from resolution. Control = E2 (win 400, hop 160).
+#   A: win 400, hop 40  -> T=71,  smear 1.417 m (UNCHANGED)  = density only
+#   B: win  64, hop 16  -> T=177, smear 0.227 m              = true resolution (costs freq. resolution)
+#
+# PRE-REGISTERED PREDICTION: if the bottleneck is time-of-flight resolution, B improves RMSE
+# and A does not. If A and B both improve, the gain is extra sampling/capacity, not resolution.
+# If neither improves, I1 is DROPped -- temporal resolution is not the binding constraint.
+# Per D3, watch WHICH metric moves: I1 should buy RMSE (range), not d1 (angle).
 BV5="--use-log False"
-run batvision_5ch_nolog_hop80 run_base.py $BV5 --stft-hop 80
-run batvision_5ch_nolog_hop40 run_base.py $BV5 --stft-hop 40
+run batvision_5ch_win400_hop40 run_base.py $BV5 --stft-win 400 --stft-hop 40
+run batvision_5ch_win64_hop16  run_base.py $BV5 --stft-win 64  --stft-hop 16
 
 echo "QUEUE DONE $(date -Is)"

@@ -34,3 +34,4 @@ out/logs/
 out/.eval.lock
 out/queue_driver.log
 out/grid_driver.log
+out/.queue.lock
