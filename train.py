@@ -126,28 +126,6 @@ def multires_coh_feat(wav, ds):
     return torch.cat([base, coh512, coh128], dim=0)             # (12,H,W)
 
 
-def _onset_at(wav, n_fft, hop, win, H, W, ctx=7):
-    """Onset / direct-arrival strength per TF bin: log-magnitude ABOVE its local temporal baseline
-    (a ctx-frame moving average) -> peaks at the impulsive direct sound + early reflections, ~0 in the
-    slowly-varying reverberant tail. The first arrival's delay directly encodes distance (d = c*t/2).
-    Computed on summed L+R magnitude -> L/R-SYMMETRIC. Returns (1,H,W)."""
-    w = torch.hann_window(win, device=wav.device, dtype=wav.dtype)
-    st = torch.stft(wav, n_fft, hop, win, w, return_complex=True)   # (2,F,T)
-    logmag = torch.log1p(st.abs().sum(0))                          # (F,T) summed L+R
-    base = F.avg_pool1d(logmag.unsqueeze(0), ctx, 1, ctx // 2).squeeze(0)  # local temporal baseline
-    onset = F.relu(logmag - base)                                 # (F,T) energy above baseline
-    return F.interpolate(onset[None, None], (H, W), mode='nearest').squeeze(0).float()  # (1,H,W)
-
-
-def multires_coh_onset_feat(wav, ds):
-    """E152 (S26): the 12ch champion + an onset/direct-arrival channel (n_fft=512) -> 13ch. A genuinely
-    NEW cue (temporal energy transient, not resolution or coherence): the direct-sound onset localises
-    the first arrival = distance. L/R-symmetric trailing channel."""
-    base = multires_coh_feat(wav, ds)                            # (12,H,W)
-    onset = _onset_at(wav, 512, 160, 512, ds.H, ds.W)           # (1,H,W) symmetric
-    return torch.cat([base, onset], dim=0)                       # (13,H,W)
-
-
 # ============================================================
 # Constants (fixed, do not modify)
 # ============================================================
@@ -1004,8 +982,8 @@ if __name__ == '__main__':
     # E143 (S22, acoustic-representation): multi-res champion (10ch) + interaural coherence (1ch) via the
     # PROPOSAL-01 seam -> 11ch. The coherence channel is L/R-symmetric (swap_lr_multi passes it through).
     # (Champion = 10ch multires_feat 512+128, commit 828b9a3; revert with git checkout 828b9a3 -- train.py.)
-    prepare.FEATURE_FN = multires_coh_onset_feat
-    cfg.dataset.in_ch = 13   # E152 (S26): 12ch champion + onset/direct-arrival channel (champion=12ch, commit 36c6538)
+    prepare.FEATURE_FN = multires_coh_feat
+    cfg.dataset.in_ch = 12   # E146 (S23): 10ch multi-res + coherence at 512 AND 128 (champion=11ch, 1 coherence, commit 93ef41b)
 
     print('=' * 60)
     print(f'RayDPT — mode={args.mode}')

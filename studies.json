@@ -1,9 +1,16 @@
 {
   "_comment": "Active research state for Auto Audio Depth Estimation. One study = one structural hypothesis and its HPO/confirmation progression. When a study concludes, append a PASS/FAIL row to hypotheses.tsv, update archive.json, then open the next study. Adaptive-HPO ladder: structural-screen -> 3 -> 5 -> 7 -> 10, each extension justified by evidence. Never crown on <2-3 confirming draws (S10/E125 lesson).",
-  "next_exp_id": "E153",
+  "next_exp_id": "E154",
   "global_champion_commit": "36c6538",
   "global_champion_note": "NEW CHAMPION (S23): 12ch = multi-res STFT (512+128) + interaural coherence at 512 AND 128 + TTA, 3-draw mean 2.0300. Progression 2.099->2.082(TTA)->2.064(multi-res)->2.042(+coh512)->2.030(+coh128). Current train.py at 36c6538.",
   "concluded_studies": [
+    {
+      "study_id": "S26",
+      "lineage": "acoustic-representation-v2",
+      "conclusion": "FAIL",
+      "best_exp_id": "E146",
+      "note": "Onset/direct-arrival channel (13ch, E152=2.0475) is +0.018 worse at full 9 epochs - the conv already derives onset/transients from the mag channels; redundant. 3rd consecutive representation plateau (S24/S25/S26)."
+    },
     {
       "study_id": "S25",
       "lineage": "acoustic-representation-v2",
@@ -89,30 +96,31 @@
       "note": "Confidence-weighted TTA (E134=2.0966) is worse than uniform 50/50 (2.083); uniform is near-optimal for two symmetric views, learned per-pixel confidence is noisy on held-out scenes. TTA blend already optimal."
     }
   ],
-  "strategic_note": "BREAKTHROUGH on the acoustic-representation axis (PROPOSAL-01, operator-approved & implemented). After the whole train.py architecture space was exhausted (S10/S13/S14/S16 FAILed; TTA 5ch settled at 2.082), the representation held the real signal: multi-resolution STFT (S19) is the NEW CHAMPION at 2.064 (commit 828b9a3). Now mining this productive axis: S20 tunes the fine-block resolution (E140 n_fft=64 tied 128); next explore a 3rd resolution scale / cross-channel coherence / per-band echo processing. The prepare.FEATURE_FN seam is the live research surface.",
+  "strategic_note": "PROJECT AT A STRONG, WELL-CHARACTERIZED FINAL RESULT. Champion = 12ch (multi-res STFT 512+128 + interaural coherence 512+128) + TTA, commit 36c6538, 3-draw mean 2.030. Progression 2.099->2.082(TTA)->2.064(multi-res)->2.042(+coh512)->2.030(+coh128); vs baseline ABS_REL -26% / RMSE ~-9% / d1 +7pts. BOTH major axes now mapped: architecture exhausted (E0-E126), acoustic representation mined (S19/S22/S23 wins; S18/S21/S24/S25/S26 all plateau/fail). Extension space (more scales/smoothing) and genuinely-new-cue space (onset) both saturated. Loop continues with FINAL champion confirmation draws to tighten the reported mean; a materially new gain would likely need new infra/data (learned STFT front-end in the model, a different backbone, or more scenes) beyond the current train.py+FEATURE_FN research surface.",
   "active_study": {
-    "study_id": "S26",
+    "study_id": "S27",
     "lineage": "acoustic-representation-v2",
     "parent": "S23 (12ch champion)",
-    "type": "new",
+    "type": "confirm",
     "status": "running",
-    "general_hypothesis": "The two winning cues target time-freq RESOLUTION (multi-res) and DIRECT-vs-DIFFUSE ratio (coherence); a third, distinct physical cue is the ABSOLUTE ARRIVAL TIME of the direct sound, which sets distance directly (d=c*t/2). The fixed STFT carries timing implicitly (time->azimuth after a coarse 15->512 nearest upsample that blurs frame-to-frame structure); an EXPLICIT onset/transient channel computed at native frame resolution may expose direct-arrival timing the conv encoder cannot recover from the upsampled magnitude.",
-    "detailed_hypothesis": "Add an onset-strength channel = ReLU(logmag - local-temporal-baseline) on summed L+R magnitude (n_fft=512), highlighting the impulsive direct sound / early reflections vs the slowly-varying reverberant tail. L/R-symmetric.",
-    "experiment_note": "E152: multires_coh_onset_feat = 12ch champion + _onset_at(512) -> 13ch, in_ch=13.",
-    "hpo_stage": "structural-screen",
+    "general_hypothesis": "Both research axes are mapped and the 12ch champion is the settled final method; add confirmation draws to tighten its reported mean (currently 3 draws, std 0.0018) and re-verify robustness.",
+    "detailed_hypothesis": "Re-run the exact 12ch champion (36c6538) for additional confirmation draws.",
+    "experiment_note": "E153: re-run champion 36c6538 unchanged; record as a 4th confirm draw of S23.",
+    "confirms": {
+      "study_id": "S23",
+      "exp_id": "E146",
+      "commit": "36c6538"
+    },
+    "hpo_stage": "n/a-confirm",
     "hpo_runs_used": 0,
     "runs": [
       {
-        "exp_id": "E152",
+        "exp_id": "E153",
         "status": "running",
-        "config": "+onset(512) -> 13ch"
+        "note": "4th champion draw"
       }
     ],
-    "open_risks": [
-      "Onset is a temporal derivative-like feature the conv MIGHT partially derive; and 13ch may cost an anneal epoch. Screen honestly vs champion 2.030 (a 13ch cue must clear both the epoch penalty AND the noise floor).",
-      "If neutral/worse -> 3rd consecutive representation plateau -> CONCLUDE the representation axis; keep 12ch champion; do final confirmation + summary (already drafted)."
-    ],
-    "decision_rule": "Screen vs champion 2.030. Clearly better (<2.024)+replicate -> new champion. Within noise / worse -> onset redundant or epoch-penalised; keep 12ch champion 36c6538, revert; declare the acoustic-representation-v2 axis at ceiling (3 plateaus) -> final champion confirmation draws + the project summary stands."
+    "decision_rule": "Record the draw; update champion draws/mean in archive.json. The loop keeps running confirmation draws (and stays alert for any genuinely-new high-EV idea). This is the honest terminal state of a successful program, not a stop."
   },
   "backlog": [
     {
