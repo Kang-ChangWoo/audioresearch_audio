@@ -32,3 +32,5 @@ out/logs/
 
 # scored-evaluation lock (see utils/evallock.py)
 out/.eval.lock
+out/queue_driver.log
+out/grid_driver.log
