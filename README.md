@@ -1,6 +1,58 @@
 # Auto Audio Depth Estimation
 
-Autonomous research — binaural echoes → ERP radial depth (SoundSpaces).
+Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpaces).
+
+<!-- RESEARCH:START -->
+## Autonomous research state
+
+| | |
+|---|---|
+| **Mode** | `SYNTHESIZE` — no runs; review evidence, find contradictions, pick the highest-information next question |
+| **Active study** | `S0` [new] batvision-reference (*running*) |
+| **Research question** | Before any RayDPT work the BatVision U-Net reference must be re-anchored under the PLANAR depth target, and we must know which binaural input representation the reference actually needs. Two questions |
+| **Current action** | 2x2 grid on run_base.py, 1h each, sequential on one GPU: {2ch=[L,R], 5ch=[L,R,ILD,cosIPD,sinIPD]} x {use_log True, False}. E0 batvision_2ch_nolog, E1 batvision_2ch_log, E2 batvisio |
+| **Latest result** | `E1` batvision_2ch_log: composite **1.8784** (rmse 1.3116, d1 0.5808, abs_rel 0.4211), best epoch 14/26 |
+| **Next decision** | Rank by the honest composite. The winning cell becomes the reference number RayDPT must beat. The qualitative figure shows ONE column per channel count, always the NON-LOG variant (operator instructio |
+| **Why this mode** | Two grid cells concluded and both produced unexplained results (D1: a pre-registered prediction failed; D2: a budget confound that affects every future run). Rather than spend the remaining GPU on mor |
+
+### Current hypothesis
+
+- **General** — Before any RayDPT work the BatVision U-Net reference must be re-anchored under the PLANAR depth target, and we must know which binaural input representation the reference actually needs. Two questions: (a) how much do the derived interaural cues (ILD, cosIPD, sinIPD) add over the bare [L,R] magnitude pair; (b) does log1p magnitude compression help or hurt.
+- **Detailed** — log1p compression equalises the dynamic range between the direct sound and the far-field echo tail, so it should help a model that must read weak late reflections to place distant surfaces -> log wins, and it should help the 2ch stack MORE than the 5ch stack (in 5ch, ILD already supplies a log-domain ratio, so part of the compression benefit is redundant). Adding ILD+IPD gives explicit interaural level/phase, which is where azimuth and hence per-direction depth structure lives -> 5ch beats 2ch at both log settings.
+- **Implementation note** — 2x2 grid on run_base.py, 1h each, sequential on one GPU: {2ch=[L,R], 5ch=[L,R,ILD,cosIPD,sinIPD]} x {use_log True, False}. E0 batvision_2ch_nolog, E1 batvision_2ch_log, E2 batvision_5ch_nolog, E3 batvision_5ch_log. Driver: utils/run_batvision_grid.sh.
+
+### Research portfolio
+
+| Idea | Mechanism family | Causal distance | Target bottleneck | Status | Next test |
+|---|---|---|---|---|---|
+| `I1` | acoustic-representation / temporal resolution | far | time-of-flight quantisation in the input representation | backlog | probe on run_base.py once the batvision grid frees the GPU |
+| `I2` | decoder resolution | near | output resolution: 4x bilinear upsample smears the target's sharp steps | backlog | run the upsample-bound diagnostic on the finished batvision checkpoint (CPU/GPU, seconds) |
+| `I3` | training-optimization | near | the 1h wall-clock budget is spent on epochs that make the model worse | backlog | queue after the RayDPT planar re-anchor (E4); this is a confound affecting EVERY future ru |
+
+### Open discrepancies
+
+*Unexplained observations are research assets, not noise.*
+
+- **`D1`** — log1p magnitude compression is a no-op at 2ch: E1 (log) composite 1.8784 vs E0 (nolog) 1.8854, delta 0.0070 < sigma 0.008. The two runs SPLIT the underlying metrics -- log wins rmse (1.3116 vs 1.3186) and d1 (0.5808 vs 0.5785), nolog wins abs_rel (0.4143 vs 0.4211).
+  <br/>*Why it matters:* The pre-registered detailed hypothesis predicted log would help MORE at 2ch than at 5ch, because in the 5ch stack ILD already supplies a log-domain ratio. At 2ch it does not help at all, so that half of the prediction is unsupported. A metric split with a sub-sigma delta is the signature of noise, not of a mechanism.
+- **`D2`** — Both 2ch cells peak at epoch 14 of 26 and both peak at exactly 2400.3 MB VRAM.
+  <br/>*Why it matters:* The overfitting turn and the memory envelope are properties of the architecture + schedule, NOT of the input representation. This makes epoch count a CONFOUND for every comparison run under the fixed wall-clock budget: any change that slows an epoch silently reduces the epochs that fit, and is penalised for reasons unrelated to its mechanism.
+
+### Recent decisions
+
+| When | Mode | Event | Note |
+|---|---|---|---|
+| 2026-07-10T03:20 | `synthesize` | infrastructure | Serial scored-evaluation lock added (utils/evallock.py). Our composite has no runtime term, but TIME_BUDGET is wall-clock, so over |
+| 2026-07-10T03:12 | `synthesize` | idea_added | Temporal resolution of the input (hop 160 -> 40). Causally FAR from the current decoder/attention lineage, grounded in sensing phy |
+| 2026-07-10T03:10 | `synthesize` | divergence_checkpoint | Abstraction levels reviewed: input representation / target geometry / decoder resolution / optimisation schedule / sensing physics |
+| 2026-07-10T03:05 | `synthesize` | mode_changed | Two grid cells concluded and both produced unexplained results (D1: a pre-registered prediction failed; D2: a budget confound affe |
+| 2026-07-10T02:30 | `exploit` | discrepancy_recorded | log1p compression is a no-op at 2ch, contradicting the pre-registered prediction that it would help MORE at 2ch than 5ch. Await E2 |
+| 2026-07-10T02:23 | `exploit` | experiment_completed | batvision 2ch log: composite 1.8784, delta vs E0 = 0.0070 < sigma 0.008. Metrics split across the two runs. Crown neither. |
+| 2026-07-10T01:30 | `exploit` | discrepancy_recorded | Best at epoch 14/26 then 12 epochs of overfitting; val loss rises 0.1871->0.1925. Cosine sized for 40 epochs, only 26 fit the budg |
+| 2026-07-10T01:23 | `exploit` | experiment_completed | batvision 2ch nolog: composite 1.8854 (rmse 1.3186, d1 0.5785, abs_rel 0.4143), best epoch 14/26. |
+
+*Updated by `python utils/report.py research`. Champion: none yet.*
+<!-- RESEARCH:END -->
 
 **Reference model** = BatVision U-Net (`base/`, plain pix2pix encoder→decoder, trained by
 `run_base.py`). **My model** = the ray-conditioned RayDPT (`train.py`), iterated to beat the
@@ -12,8 +64,10 @@ reference under the same fixed split / target / metric / selection composite.
 
 ## Visual results
 
-Held-out val scenes — `RGB | GT depth | batvision | best1 | best2` (best1/best2 fill in as
-improved "my model" checkpoints are found; RGB is unavailable in the simplified dataset).
+Held-out val scenes — `RGB | GT depth | batvision (2ch) | batvision (5ch) | current (my model)`.
+The batvision reference gets exactly one column per channel count, always the **non-log** variant;
+the log variants are still trained and logged to `out/results.tsv`. "my model" fills in as improved
+RayDPT checkpoints are found. RGB is unavailable in the simplified dataset.
 
 ![qualitative depth comparison](out/display/qualitative.png)
 
@@ -53,14 +107,14 @@ flowchart TD
         A2 --> A3["UNet8 encoder<br/>256x512 → 1x2 · skips e2/e3/e4"]
         A3 --> A4["RayBank ray queries ×<br/>audio cross-attention (scales 16/32/64)"]
         A4 --> A5["DPT fusion +<br/>local spherical window attention"]
-        A5 --> A6["Sigmoid head → ERP radial depth<br/>256x512, [0,1] × max_depth"]
+        A5 --> A6["Sigmoid head → ERP planar depth<br/>256x512, [0,1] × max_depth"]
     end
     subgraph REF["batvision (reference)"]
         direction TB
         B1["Binaural echo waveform (2ch)"] --> B2["STFT → magnitude cue stack (in_ch)"]
         B2 --> B3["UNet8 encoder<br/>256x512 → 1x2 · skips"]
         B3 --> B4["ConvTranspose decoder + skips"]
-        B4 --> B5["Sigmoid head → ERP radial depth"]
+        B4 --> B5["Sigmoid head → ERP planar depth"]
     end
     MY ~~~ REF
 ```

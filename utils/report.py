@@ -266,6 +266,98 @@ def build_progress(out_path=None):
     return out_path
 
 
+def update_readme_research():
+    """Rewrite the <!-- RESEARCH:START/END --> block: the live autonomous-research dashboard.
+
+    Independent of the RESULTS block, which stays exactly as it is. A reader opening the
+    README should see, without clicking anything: what mode the researcher is in, what it is
+    asking, what it just learned, what it will do next, which ideas are alive, and which
+    observations remain unexplained. This is a dashboard, NOT a database -- no full log dumps.
+    """
+    import json
+    sys.path.insert(0, ROOT)
+    from utils.research import (load_studies, load_ideas, recent_decisions, BUDGET)
+
+    st = load_studies()
+    ideas = load_ideas()
+    a = st.get('active_study', {})
+    mode = st.get('mode', 'exploit')
+    runs = a.get('runs', [])
+    latest = runs[-1] if runs else None
+
+    L = ['<!-- RESEARCH:START -->',
+         '## Autonomous research state', '',
+         '| | |', '|---|---|',
+         f'| **Mode** | `{mode.upper()}` — {BUDGET.get(mode, "")} |',
+         f'| **Active study** | `{a.get("study_id","—")}` [{a.get("type","—")}] '
+         f'{a.get("lineage","—")} (*{a.get("status","—")}*) |',
+         f'| **Research question** | {a.get("general_hypothesis","—")[:200]} |',
+         f'| **Current action** | {a.get("experiment_note","—")[:180]} |']
+    if latest:
+        L.append(f'| **Latest result** | `{latest.get("exp_id")}` {latest.get("name","")}: '
+                 f'composite **{latest.get("composite")}** '
+                 f'(rmse {latest.get("rmse")}, d1 {latest.get("d1")}, abs_rel {latest.get("abs_rel")}), '
+                 f'best epoch {latest.get("best_epoch")}/{latest.get("epochs_ran")} |')
+    else:
+        L.append('| **Latest result** | *(no scored run in this study yet)* |')
+    L.append(f'| **Next decision** | {a.get("decision_rule","—")[:200]} |')
+    L.append(f'| **Why this mode** | {st.get("mode_reason","—")[:200]} |')
+    L += ['', '### Current hypothesis', '',
+          f'- **General** — {a.get("general_hypothesis","—")}',
+          f'- **Detailed** — {a.get("detailed_hypothesis","—")}',
+          f'- **Implementation note** — {a.get("experiment_note","—")}', '']
+
+    live = [i for i in ideas.get('ideas', []) if i.get('status') not in ('dropped', 'validated')]
+    if live:
+        L += ['### Research portfolio', '',
+              '| Idea | Mechanism family | Causal distance | Target bottleneck | Status | Next test |',
+              '|---|---|---|---|---|---|']
+        for i in live:
+            L.append('| `%s` | %s | %s | %s | %s | %s |' % (
+                i['id'], i.get('mechanism_family', '—'), i.get('causal_distance', '—'),
+                i.get('target_bottleneck', '—'), i.get('status', '—'),
+                i.get('next_action', '—')[:90]))
+        L.append('')
+
+    op = [d for d in ideas.get('discrepancies', []) if d.get('status') == 'open']
+    if op:
+        L += ['### Open discrepancies', '',
+              '*Unexplained observations are research assets, not noise.*', '']
+        for d in op:
+            L.append(f'- **`{d["id"]}`** — {d.get("observation","")}')
+            L.append(f'  <br/>*Why it matters:* {d.get("why_it_matters","")}')
+        L.append('')
+
+    dec = recent_decisions(8)
+    if dec:
+        L += ['### Recent decisions', '', '| When | Mode | Event | Note |', '|---|---|---|---|']
+        for d in reversed(dec):
+            note = (d.get('note') or d.get('reason') or '').replace('|', '\\|')
+            L.append('| %s | `%s` | %s | %s |' % (
+                d.get('ts', '')[:16], d.get('mode', '?'), d.get('event', '?'), note[:130]))
+        L.append('')
+
+    L.append(f'*Updated by `python utils/report.py research`. '
+             f'Champion: {st.get("global_champion") or "none yet"}.*')
+    L.append('<!-- RESEARCH:END -->')
+    block = '\n'.join(L)
+
+    with open(README) as f:
+        text = f.read()
+    pat = re.compile(r'<!-- RESEARCH:START -->.*?<!-- RESEARCH:END -->', re.DOTALL)
+    if pat.search(text):
+        text = pat.sub(block, text)
+    else:
+        # first install: insert near the top, right after the title + tagline paragraph
+        parts = text.split('\n\n', 2)
+        text = ('\n\n'.join(parts[:2]) + '\n\n' + block + '\n\n' + parts[2]) if len(parts) > 2 \
+            else text.rstrip() + '\n\n' + block + '\n'
+    with open(README, 'w') as f:
+        f.write(text)
+    print(f'[report] updated README research dashboard (mode={mode}, '
+          f'{len(live)} live ideas, {len(op)} open discrepancies)')
+
+
 def update_readme_table():
     """Rewrite the <!-- RESULTS:START/END --> block in README with a metrics table."""
     rows = read_results()
@@ -341,7 +433,7 @@ def prune_visualizations(keep_latest=6, dry_run=False):
 
 def main():
     p = argparse.ArgumentParser(description='Reporting / visualization')
-    p.add_argument('cmd', choices=['qualitative', 'progress', 'readme', 'prune', 'all'])
+    p.add_argument('cmd', choices=['qualitative', 'progress', 'readme', 'research', 'prune', 'all'])
     p.add_argument('--n-scenes', type=int, default=7)
     p.add_argument('--keep-latest', type=int, default=6)
     p.add_argument('--dry-run', action='store_true')
@@ -354,12 +446,15 @@ def main():
         build_progress()
     elif a.cmd == 'readme':
         update_readme_table()
+    elif a.cmd == 'research':
+        update_readme_research()
     elif a.cmd == 'prune':
         prune_visualizations(a.keep_latest, a.dry_run)
     elif a.cmd == 'all':
         build_qualitative(a.n_scenes)
         build_progress()
         update_readme_table()
+        update_readme_research()
         if a.prune:
             prune_visualizations(a.keep_latest, a.dry_run)
 

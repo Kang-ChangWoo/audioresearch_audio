@@ -7,6 +7,12 @@
   "next_exp_id": "E4",
   "global_champion": null,
   "concluded_studies": [],
+
+  "mode": "synthesize",
+  "mode_reason": "Two grid cells concluded and both produced unexplained results (D1: a pre-registered prediction failed; D2: a budget confound that affects every future run). Rather than spend the remaining GPU on more of the same lineage, step up a level. The divergence checkpoint surfaced the sensing-physics abstraction level, which had never been examined: the input resolves time-of-flight only at 0.567m while the best RMSE is 1.3116m. S0 continues to completion in the background -- it is a formal study and is not reinterpreted or cut short.",
+  "studies_since_synthesize": 0,
+  "portfolio": "out/ideas.json",
+  "decision_log": "out/decision_log.jsonl",
   "active_study": {
     "study_id": "S0",
     "lineage": "batvision-reference",

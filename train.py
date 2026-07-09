@@ -41,6 +41,7 @@ from prepare import (
     make_dataloader, compute_errors, load_gt_rgb, erp_grid,
     swap_audio_lr, build_channel_names,
 )
+from utils.evallock import eval_lock
 
 
 # ============================================================
@@ -750,7 +751,10 @@ if __name__ == '__main__':
     print(f'Batch size: {args.batch_size}, LR: {args.lr}, Optimizer: {args.optimizer}')
     print('=' * 60)
 
-    if args.mode == 'train':
-        train(cfg)
-    elif args.mode == 'test':
-        test(cfg)
+    # Scored runs are serialised: TIME_BUDGET is wall-clock, so two runs sharing the
+    # single GPU each fit fewer epochs and are no longer comparable. See utils/evallock.py.
+    with eval_lock(args.experiment_name):
+        if args.mode == 'train':
+            train(cfg)
+        elif args.mode == 'test':
+            test(cfg)

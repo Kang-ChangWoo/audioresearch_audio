@@ -29,3 +29,6 @@ outputs/
 # Run logs (kept local). results.tsv + out/display/ ARE tracked (per user request).
 run.log
 out/logs/
+
+# scored-evaluation lock (see utils/evallock.py)
+out/.eval.lock

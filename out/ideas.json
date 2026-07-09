@@ -1,0 +1,83 @@
+{
+  "_comment": "Research portfolio: the small set of LIVE ideas, not a brainstorm dump. Prune aggressively -- an idea leaves via `validated` or `dropped`, and its conclusion lives in out/hypothesis*.tsv. `causal_distance` is measured from the CURRENT lineage (decoder/attention tweaks on RayDPT): near = same family, mid = different component of the same pipeline, far = different abstraction level or transferred from another field. Statuses: backlog | probing | candidate | verifying | validated | dropped | inconclusive.",
+  "ideas": [
+    {
+      "id": "I1",
+      "status": "backlog",
+      "origin": "physical property of the sensing modality (measured, not searched)",
+      "target_bottleneck": "time-of-flight quantisation in the input representation",
+      "mechanism_family": "acoustic-representation / temporal resolution",
+      "causal_distance": "far",
+      "general_hypothesis": "Depth from echoes is fundamentally a time-of-flight measurement: a surface at distance d returns its echo at t = 2d/c. If the input representation cannot resolve t finely, no decoder -- however expressive -- can resolve d. The current pipeline may be starved of temporal information long before the model sees it.",
+      "detailed_hypothesis": "MEASURED: with _NFFT=512, _HOP=160 @48kHz over a 58.8ms (10m round-trip) window, the STFT yields only T=18 time frames, which _features() then nearest-neighbour interpolates 28.4x up to the 512-wide axis. One hop = 3.333ms = 1.133m round-trip = 0.567m of one-way depth. So the input QUANTISES depth at 0.567m while the best model's RMSE is 1.3116m -- the same order of magnitude. Shrinking _HOP (160 -> 40) raises T to 71 frames and the depth quantum to 0.142m, adding genuine information at nearly zero model cost, since the feature is resized to (256,512) either way.",
+      "expected_metric_effect": "RMSE falls first and most (it is dominated by coarse distance error); d1 follows. If ABS_REL improves but RMSE does not, the gain is NOT time-of-flight and the mechanism is unsupported.",
+      "main_falsification_condition": "Halving _HOP twice (160->80->40) produces no monotone RMSE improvement. That would mean the model was never bottlenecked by temporal resolution, and the 18-frame input already carried more information than the decoder could use.",
+      "minimal_falsifiable_test": "run_base.py (batvision reference, cheapest parent) with _HOP=40 vs _HOP=160, everything else fixed. One structural run each. Reference parent, not RayDPT: if the mechanism is real it must show up on the SIMPLEST model, and that isolates it from RayDPT's decoder.",
+      "budget_risk": "low. STFT cost only; the feature is interpolated to (256,512) regardless, so model FLOPs/VRAM are unchanged. Finer hop means more STFT frames -> slightly slower dataloading, which spends wall-clock TIME_BUDGET. Watch epochs-fit.",
+      "evidence_required": "monotone RMSE improvement across two hop halvings, on a parent that is not the current champion.",
+      "next_action": "probe on run_base.py once the batvision grid frees the GPU"
+    },
+    {
+      "id": "I2",
+      "status": "backlog",
+      "origin": "measured property of the planar target (grad-energy, 24 samples / 6 scenes)",
+      "target_bottleneck": "output resolution: 4x bilinear upsample smears the target's sharp steps",
+      "mechanism_family": "decoder resolution",
+      "causal_distance": "near",
+      "general_hypothesis": "The planar (cubemap) target is piecewise-constant -- flat regions separated by sharp steps -- because a wall perpendicular to a cube face has constant planar depth. A decoder that cannot represent a step cannot fit this target, and d1 (a +-25% threshold metric) punishes blurred edges hard.",
+      "detailed_hypothesis": "RayDPT decodes at 64x128 and bilinear-upsamples 4x to 256x512; batvision's U-Net decodes to full resolution. Adding a 128x256 DPT scale (RayBank Q128 + an e1 skip) halves the final upsample to 2x, letting the head place steps at twice the spatial precision.",
+      "expected_metric_effect": "d1 rises; RMSE improves modestly. If d1 does not move, edge blur was not the binding constraint.",
+      "main_falsification_condition": "d1 unchanged (within sigma 0.008 composite) despite the finer decode -- i.e. the model's error is in WHERE the surface is, not in how sharply the boundary is drawn.",
+      "minimal_falsifiable_test": "Diagnostic first, and it is nearly free: take the trained batvision prediction at full resolution, downsample to 64x128, bilinear-upsample back to 256x512, and recompute d1/RMSE. The drop is an UPPER BOUND on what RayDPT loses to its 4x upsample. Run the expensive architecture change only if that bound is large.",
+      "budget_risk": "medium. A 128x256 attention scale costs VRAM and wall-clock; fewer epochs fit the 1h budget, which is itself a confound (see D2).",
+      "evidence_required": "the cheap upsample-bound diagnostic must show a material d1 drop BEFORE the architecture change is attempted.",
+      "next_action": "run the upsample-bound diagnostic on the finished batvision checkpoint (CPU/GPU, seconds)"
+    },
+    {
+      "id": "I3",
+      "status": "backlog",
+      "origin": "unexplained result from E0/E1 (best at epoch 14 of 26, then 12 epochs of overfitting)",
+      "target_bottleneck": "the 1h wall-clock budget is spent on epochs that make the model worse",
+      "mechanism_family": "training-optimization",
+      "causal_distance": "near",
+      "general_hypothesis": "A schedule sized for a different epoch count is not a schedule. The cosine LR is written for --epochs 40 but only ~26 fit the wall-clock budget, so LR never anneals and training ends mid-schedule at a degraded point, while the last ~12 epochs actively overfit.",
+      "detailed_hypothesis": "Set --epochs to what actually fits (~24-26) so cosine anneals to zero inside the budget. The annealed tail is where most models make their final, best-generalising progress; recovering it should improve the composite at zero extra compute.",
+      "expected_metric_effect": "composite improves; the best epoch moves to near the LAST epoch instead of epoch 14. If the best epoch stays early, the cause is overfitting, not the schedule, and weight decay / EMA is the right lever instead.",
+      "main_falsification_condition": "with an annealed schedule the best epoch is still ~14/26 -- the model overfits regardless of LR, so the schedule was never the problem.",
+      "minimal_falsifiable_test": "one run of the E1 config with --epochs 26. Compare best_epoch and composite.",
+      "budget_risk": "none. Same wall-clock, same architecture.",
+      "evidence_required": "best_epoch moves late AND composite improves beyond sigma=0.008.",
+      "next_action": "queue after the RayDPT planar re-anchor (E4); this is a confound affecting EVERY future run, so fix it early"
+    },
+    {
+      "id": "I4",
+      "status": "dropped",
+      "origin": "own reasoning, refuted before consuming any GPU time",
+      "target_bottleneck": "(claimed) the net wastes capacity learning cube-edge creases",
+      "mechanism_family": "geometric head reparameterisation",
+      "causal_distance": "mid",
+      "general_hypothesis": "planar = radial * linf with linf = max(|dx|,|dy|,|dz|) a fixed per-pixel field; predict the smooth radial field and multiply by the known geometry so the creases come for free.",
+      "why_dropped": "The premise is measurably false. Grad-energy over 24 samples / 6 scenes: planar 0.01618, radial 0.01677; radial is smoother in only 17% of samples (mean ratio 1.035). PLANAR is already the smoother parameterisation -- for an axis-aligned room a wall perpendicular to a cube face has CONSTANT planar depth, while radial curves as 1/cos. Reparameterising to radial would make the regression HARDER.",
+      "scope_of_negative_evidence": "Refutes THIS reparameterisation under the planar target on SoundSpaces rooms (mostly axis-aligned). It says nothing about geometry-conditioned heads in general, and nothing about scenes with non-axis-aligned walls. Do not generalise it into 'geometric conditioning does not help'.",
+      "next_action": "none. Revive only with new evidence (e.g. a non-axis-aligned benchmark)."
+    }
+  ],
+  "discrepancies": [
+    {
+      "id": "D1",
+      "status": "open",
+      "observation": "log1p magnitude compression is a no-op at 2ch: E1 (log) composite 1.8784 vs E0 (nolog) 1.8854, delta 0.0070 < sigma 0.008. The two runs SPLIT the underlying metrics -- log wins rmse (1.3116 vs 1.3186) and d1 (0.5808 vs 0.5785), nolog wins abs_rel (0.4143 vs 0.4211).",
+      "why_it_matters": "The pre-registered detailed hypothesis predicted log would help MORE at 2ch than at 5ch, because in the 5ch stack ILD already supplies a log-domain ratio. At 2ch it does not help at all, so that half of the prediction is unsupported. A metric split with a sub-sigma delta is the signature of noise, not of a mechanism.",
+      "diagnostic_value": "If E2/E3 show log ALSO does nothing at 5ch, then dynamic-range compression is simply irrelevant to this task -- which would point at time-of-flight (I1), not level statistics, as the operative cue. That is a cheap, strong inference from data already being collected.",
+      "next_action": "read the E2/E3 result before interpreting; do not crown either 2ch cell"
+    },
+    {
+      "id": "D2",
+      "status": "open",
+      "observation": "Both 2ch cells peak at epoch 14 of 26 and both peak at exactly 2400.3 MB VRAM.",
+      "why_it_matters": "The overfitting turn and the memory envelope are properties of the architecture + schedule, NOT of the input representation. This makes epoch count a CONFOUND for every comparison run under the fixed wall-clock budget: any change that slows an epoch silently reduces the epochs that fit, and is penalised for reasons unrelated to its mechanism.",
+      "diagnostic_value": "Any future structural change that costs wall-clock (e.g. I2's extra attention scale) must report epochs-fit alongside the composite, or its result is uninterpretable.",
+      "next_action": "fix via I3 (match --epochs to the budget); until then, always log best_epoch and epochs_ran"
+    }
+  ]
+}

@@ -1,139 +1,182 @@
-# Auto Audio Depth Estimation
+# Auto Audio Depth Estimation — operating constitution
 
-Project slug: `auto-audio-depth-estimation`
+Autonomous research on **depth estimation from binaural echoes**. One researcher, one GPU, running
+indefinitely. This file is the operating manual; it carries **no research directions** — those live in
+`studies.json`, `out/ideas.json`, and `out/hypothesis*.tsv`.
 
-Autonomous research for **depth estimation from binaural echoes**. The agent forms a hypothesis,
-edits `train.py`, trains under a fixed budget, evaluates, concludes PASS/FAIL, records the finding,
-and continues — indefinitely. This file is the **operating manual**: how we run experiments and what
-is fixed. It intentionally carries **no research directions** (what mechanism to try next) — those
-live in the study records (`out/hypothesis*.tsv`, `studies.json`), not here.
+## 1. Task, models, fixed evaluator
 
-## State & branches
-- Experiments run on the active phase branch (currently `2026-July-RayDPT-validation` / `master`).
-  Each run gets one commit; `git push` after each.
-- The June improvement phase is archived on `2026-June-RayDPT-improvement` (read-only history).
+**My model = RayDPT** (`train.py`). One architectural invariant: keep it **ray-conditioned** (per-ray
+`RayBank` queries × audio cross-attention; depth decoded per ray direction, not regressed from a global
+bottleneck). A pure encoder→pixel-decoder is the reference's job, not mine.
 
-## Models, inputs & objective
+**Reference = BatVision U-Net** (`base/batvision.py`, run by `run_base.py`) — a structural clone of
+`train.py` (identical cfg / loss / loops / CLI); only `build_model` differs, so the comparison is
+apples-to-apples. It sets the number my model must beat.
 
-**My model = RayDPT** (`train.py`) — the ray-conditioned model you edit. One architectural invariant:
-keep it **RAY-CONDITIONED** (per-ray `RayBank` queries × audio cross-attention; depth decoded per ray
-direction, not regressed from a global bottleneck). A pure encoder→pixel-decoder is out of scope — that
-is the reference's job.
+**Input** — named binaural cues, each on/off, plus `use_log` (`prepare.build_channel_names`), canonical
+order `logL/L, logR/R, ILD, cosIPD, sinIPD`. Flags on both scripts: `--use-log`, `--feat-{L,R,ILD,cosIPD,sinIPD}`.
+`in_ch` is derived; the L/R mirror aug (`swap_audio_lr`) is name-aware.
 
-**Reference model = BatVision U-Net** (`base/batvision.py`) — the plain pix2pix/CycleGAN `unet_256`
-(model only) from [AmandineBtto/Batvision-Dataset](https://github.com/AmandineBtto/Batvision-Dataset).
-`run_base.py` is a **structural clone** of `train.py` (identical cfg / composite loss / train-eval-CLI /
-fixed `prepare.py` harness; only `build_model` differs) so the comparison is apples-to-apples. It sets the
-number my model must beat. Run: `conda activate ss && python run_base.py --mode train`; add
-`--epochs 1 --max-iters 1 --max-val-batches N` for a 1-iteration pipeline/visual smoke.
+**Target** — **PLANAR** (cubemap perpendicular-Z) ERP depth, used as stored. Measured: planar is the
+smoother, piecewise-constant parameterisation (a wall perpendicular to a cube face has constant planar
+depth). Nothing measured before commit `87b3047` (the radial→planar switch) is comparable to anything after.
 
-**Input representation** — named binaural cues, each on/off, plus a `use_log` switch
-(`prepare.build_channel_names` / `SoundSpacesDataset._features`), canonical order
-`logL/L, logR/R, ILD, cosIPD, sinIPD`. Flags on both scripts: `--use-log`, `--feat-L`, `--feat-R`,
-`--feat-ILD`, `--feat-cosIPD`, `--feat-sinIPD` (all `True/False`). `in_ch` is derived from the enabled
-cues and the L/R mirror aug (`swap_audio_lr`) is name-aware. Default (all on, `use_log=True`) = the 5ch
-`[logL,logR,ILD,cosIPD,sinIPD]` stack.
+**Objective** (`composite_loss`): `w_dense·main + w_coarse_layout·lc + w_low·llow`. Only `main`
+(dense masked-MAE, `w_dense=1`) is required; `lc`/`llow` are auxiliary and free to tune or zero.
 
-**Objective** (`composite_loss`): `loss = w_dense·main + w_coarse_layout·lc + w_low·llow`.
-`main` = dense masked-MAE on full-res depth `D` (the **only required** term, `w_dense=1`). `lc` = coarse
-16×32 layout MAE, `llow` = low-pass MAE — auxiliary regularizers, free to tune or zero. Depth is radial
-(`prepare._depth` converts cubemap perpendicular-Z → along-ray depth).
+### Editable / fixed boundary
+**Never edit** (these *are* the benchmark): `get_scene_split`, `_wave`, `_depth`, `compute_errors`, the
+score formula, the held-out split. Don't add packages — use the conda `ss` env. Everything else in
+`train.py` is fair game. **Infrastructure changes are never recorded as research results.**
 
-**Fixed & off-limits** (define the benchmark; never edit): `get_scene_split` (split), `_wave`
-(waveform), `_depth` (target), `compute_errors` (metric). Don't add packages — use the conda `ss` env.
-Everything else in `train.py` (architecture, optimizer, schedule, batch/model size, loss weights,
-augmentation, the representation toggles) is fair game.
+## 2. Metric interpretation
 
-## Setup (new run)
-1. Confirm the active branch — a run gets one commit.
-2. Read the in-scope files: `README.md`; `prepare.py` (fixed split/waveform/target/metric — do not
-   touch; the representation is editable); `train.py` (the file you edit); `run_base.py` + `base/`
-   (the reference).
-3. Verify the dataset dir exists (else `conda activate ss && python prepare.py`).
-4. Ensure `out/results.tsv` has its header row. The first run establishes the baseline.
+Judge on the **honest composite** `rmse/1.6 + (1-d1)/0.46 + 0.35·abs_rel` (lower = better). RMSE and `d1`
+dominate because they are not directly optimised and so are trustworthy; ABS_REL is directly optimisable
+→ gameable → discounted. Noise σ ≈ 0.008 (up to ~0.019 on small samples). **Never crown a sub-0.015
+candidate on fewer than 3 confirming draws.**
 
-## The experiment loop
-Single GPU, fixed **1-hour** budget (`TIME_BUDGET = 3600`, wall-clock training; heavier configs simply
-fit fewer anneal epochs). LOOP:
-1. Edit `train.py` with **one** hypothesis.
-2. `git commit`.
-3. `conda activate ss && python train.py --mode train > run.log 2>&1` (redirect — do not tee/flood context).
-4. `grep "ABS_REL\|RMSE\|Best" run.log`. Empty ⇒ crashed: `tail -n 50 run.log`, fix if trivial and re-run,
-   else log `crash` and move on.
-5. Record to `out/results.tsv`; regenerate figures (`python utils/report.py all`).
-6. **Keep** (advance the commit) if it improves the honest composite; else **revert**. Rewind sparingly.
+Never conclude from the composite alone. After every run, ask which component moved and whether it is the
+one the hypothesis predicted: did RMSE improve, or only `d1`? Did a gain in one metric hide a regression in
+another? **Distinguish `score improvement` from `mechanism support` from `scientific contribution`** — they
+are three different claims. Also log `best_epoch` / `epochs_ran`: the budget is wall-clock, so any change
+that slows an epoch silently fits fewer of them, and that is a confound, not a result.
 
-Timeout: kill any run past ~70 min and treat it as a failure. VRAM is a soft constraint (moderate
-increases OK for real gains, no blow-ups). **Simplicity:** all else equal, simpler wins — a gain from
-deleting code is the best kind; a tiny gain that adds hacky complexity is not worth keeping.
+## 3. The four research modes
 
-## Selection & decision policy
-Judge on the **honest composite** `rmse/1.6 + (1-d1)/0.46 + 0.35·abs_rel` (lower = better). RMSE and
-`d1` (= `a1`, the δ<1.25 threshold accuracy — fraction of pixels within ±25% of GT) dominate because
-they are honest signals; ABS_REL is directly optimizable by a relative loss → gameable, so it is
-discounted. `train.py` selects the best checkpoint by this composite. Never crown a config that wins one
-metric while regressing the others; also weigh Pareto behaviour, noise, complexity, and VRAM.
+These are not agents. They are one researcher's behaviour policies, selected by evidence.
 
-**Noise & confirmation.** σ ≈ 0.008 (20+ reruns), up to ~0.014–0.019 on small samples. Large clear
-improvement → provisional PASS; near-noise → confirm required; consistent confirmation → strengthen;
-inconsistent → mark uncertain / one more justified confirm. **Never crown a sub-0.015 candidate on fewer
-than 3 confirming draws.**
+**EXPLORE** — breadth-first discovery of mechanisms *causally different* from the current lineage.
+Budget is deliberately short: **1 structural run + 0–2 focused probes → CANDIDATE / DROP / INCONCLUSIVE.**
+Never rescue a structurally broken idea with a parameter sweep. Never declare CANDIDATE on one unexplained
+lucky number — require confirmation, a sensitivity check, the *predicted* metric moving, a diagnostic, or a
+known failure regime improving. Promising mechanism → hand to VERIFY, don't optimise it here.
 
-## Hypothesis-driven structure (explore mechanisms, not endless HPO)
-Every new/refine/combine study states three levels — do not confuse them:
-1. **General hypothesis** — WHY this direction matters (a problem or principle), not a parameter value.
-2. **Detailed hypothesis** — HOW the mechanism is expected to work.
-3. **Experiment note** — WHAT actually changed in the run (the code/param diff).
+**VERIFY** — rigorously validate an Explore candidate. Read the diff to understand the *mechanism*, choose
+the **correct parent**, restore it, and **re-implement the mechanism cleanly and minimally there**. Never
+call an accumulation of incidental Explore edits a formal validation. Then: standalone run → bounded HPO →
+ablation / falsification → PASS / FAIL. Ask: does it reproduce? on a clean parent? is a simpler explanation
+available? is the gain from the hypothesised cause? in which regime does it hold?
 
-Exactly one **type** per experiment: **new** (a qualitatively new mechanism) · **refine** (better
-formulation/placement of an existing mechanism) · **tune** (HPO that serves a structural idea) ·
-**combine** (merge compatible mechanisms — state why they are complementary first) · **confirm**
-(validate a near-noise / one-run conclusion; must reference what it confirms).
+**EXPLOIT** — depth-first improvement of an already-supported mechanism. Adaptive HPO ladder:
+**3 → 5 → 7 → 10** trials, each extension justified by accumulated evidence (3 = minimum fair tuning,
+7 = beats or closely competes with its parent, 10 = exceptional and still improving) → PASS / FAIL. A new
+champion is not a licence to bolt on the next component: first ask what actually produced the gain, whether
+a simpler alternative explains it, and whether it is regime-specific. The next study is often that ablation.
 
-**Adaptive HPO ladder** (tuning serves research; don't over-tune a weak idea): screen the structural idea
-first; if broken in principle or catastrophically worse → conclude FAIL without mandatory HPO; otherwise
-`screen → 3 → 5 → 7 → 10`, each extension justified by accumulated evidence (3 = minimum for a viable
-idea; 7 = beats/closely competes with its parent; 10 = exceptional final candidate still improving).
+**SYNTHESIZE** — no runs. Re-read the evidence one level up: which family has been over-explored? which
+bottleneck is actually supported? which negative conclusion was over-generalised? what contradicts what?
+did the champion's gain match its hypothesis? what abstraction level is still unexamined? Then pick the
+highest-information next experiment.
 
-Maintain **lineages** (mechanism families) with their own champions in `studies.json`. A method can FAIL
-to become global champion yet PASS as a hypothesis (clear reproducible effect, useful specialist profile,
-or recombination value). After each study, pick ONE next action (explore / refine / tune / combine /
-confirm), append the conclusion, update state, `git push`, and launch the next.
+### Mode transitions are earned, not scheduled
+Never round-robin the modes. Switch on evidence:
+- Explore candidate gains real support → **VERIFY**.
+- Verify supports the mechanism and a clear improvement axis exists → **EXPLOIT**.
+- Two consecutive independent formal studies in one mechanism family fail to make meaningful progress →
+  the next structural hypothesis **must** consider a causally more distant mechanism. (Parameter runs
+  inside one HPO study are *not* independent studies.)
+- Every ~3 concluded formal studies → a short **SYNTHESIZE** checkpoint.
 
-## State files
-- `out/results.tsv` — authoritative per-run log, 7 tab-separated columns:
-  `commit  abs_rel  rmse  d1  memory_gb  status  description` (status ∈ `keep`/`discard`/`crash`;
-  crashes use `0.0000`; description ≤ ~120 chars, terse — long reasoning goes in the study record).
-- `out/hypothesis.tsv` — one short row per study (id, lineage, type, conclusion, best_comp, best_exp,
-  best_commit, one-line summary).
-- `out/hypothesis_details.tsv` — the long per-study reasoning, keyed by `study_id`.
-- `studies.json` — active study, HPO stage, `next_exp_id`, `global_champion`, backlog.
-- `utils/research.py` — `status` prints state; `composite --abs_rel A --rmse R --d1 D`; `next-id`.
+Record every mode change with its reason: `python utils/research.py mode <m> --reason "..."`.
 
-## Reporting & visualization (`utils/report.py`)
-Figures live in `out/display/` (tracked) and are embedded in `README.md`:
-- `qualitative` → `qualitative.png`: 7 val scenes × `RGB | GT | batvision | best1 | best2` (best1/best2 =
-  your top "my model" checkpoints in `checkpoints/best1|best2/`; missing → "pending" tile; RGB is N/A in
-  the simplified dataset).
-- `progress` → `score_progress.png`: RMSE, ABS_REL and a1 (d1) each as a full-width graph vs experiment,
-  running-best highlighted.
-- `readme` → refreshes the `<!-- RESULTS:START/END -->` metrics table in `README.md`.
-- `all [--prune]` runs all three. Regenerate after each run.
+## 4. Hypothesis hierarchy
 
-The **bottom of `README.md` holds a network flowchart** — a Mermaid `flowchart TD` (top-to-bottom
-block diagram) with **two separate networks**: `current` (RayDPT, my model) on top and the
-`batvision` reference U-Net below (stacked via an invisible `~~~` link). Keep it in sync when the
-architecture changes.
+Every structural study states three distinct levels:
+1. **General hypothesis** — *why this direction matters*: a problem principle or limitation.
+2. **Detailed hypothesis** — *how the mechanism is expected to work*, and **which metric it should move**.
+3. **Implementation note** — *what exactly changed* in this run.
 
-## Image retention
-Per-epoch dumps in `outputs/<exp>/visualizations/` are **git-ignored** (never committed) and pruned for
-disk: `python utils/report.py prune` keeps the earliest (initial) epoch, a few evenly-spaced milestones,
-and the latest N (`--keep-latest`, default 6), deleting the rest. Curated figures in `out/display/` are
-**tracked** — never prune those.
+"Lower the threshold to 0.2", "use Huber loss", "set hop to 40" are implementation decisions, **not**
+general hypotheses. Also state the **main falsification condition** before running.
 
-## Run autonomously & indefinitely
-Once the loop begins, do **not** pause to ask "should I keep going?". The moment a run finishes: record
-it, regenerate figures, `git push`, and launch the next. Between launches the single GPU is busy ~1 hr/run
-— schedule a wakeup to poll and resume the loop across turns; always have the next experiment staged. On
-error: log the failure, recover to a valid parent/lineage champion, diagnose briefly, continue. On
-plateau: reduce local tuning and move to a different mechanism. The loop runs until the human interrupts.
+## 5. Anti-anchoring
+
+**Parent selection.** Do not build every new idea on the current champion. Pick the most *interpretable*
+parent: baseline, minimal necessary lineage, a relevant archived champion, or the champion. If a mechanism
+does not need the champion's components, validate it on the **simplest** parent first. Keep two questions
+separate — *does the mechanism work?* and *does it combine with the champion?* Those are different experiments.
+
+**Hypothesis origin.** Champion failure diagnosis is one source, not the only one. Equally valid: an
+unexplained earlier result, a metric contradiction, a physical property of the sensing modality, a geometric
+principle, a mechanism transferred from an adjacent field, a counterfactual to a central assumption, a
+simpler explanation for an apparent gain, a budget bottleneck.
+
+**Divergence checkpoint.** Before choosing the next structural hypothesis after a run of same-family work:
+summarise current evidence, list what remains unexplained, generate **≥6 competing hypotheses spanning ≥4
+causal families or abstraction levels**, give each a minimal falsifiable test, keep the 2–3 with the highest
+information value. Six variants of one threshold are one hypothesis, not six. Abstraction levels here
+include: sensing physics (time-of-flight, echo delay) · input representation · temporal resolution ·
+target geometry · encoder · ray conditioning · decoder resolution · objective · optimisation schedule ·
+inference-time procedure. This list is not a boundary.
+
+**Search freely.** In EXPLORE and SYNTHESIZE, search papers, reference implementations, docs, and adjacent
+fields. Abstract the bottleneck *before* querying — "the decoder blurs sharp steps" generalises to
+edge-preserving upsampling, guided filtering, implicit neural representations. When importing an external
+idea, record: source · target bottleneck · transfer rationale · why it should hold for binaural echoes ·
+how it differs causally from what was already tried · its minimal falsifiable test. Relevance alone is not
+a reason to implement.
+
+## 6. Negative evidence has a scope
+
+Classify a negative result — *implementation failure · optimisation failure · budget-limited · mechanism
+unsupported · redundant mechanism · neutral · noisy/uncertain · metric trade-off · data-regime dependence ·
+local plateau* — and always record the **scope** (which representation, objective, parent, budget, metric
+regime, mechanism family).
+
+Never write `PROJECT COMPLETE`, `ARCHITECTURE EXHAUSTED`, `TASK CEILING`, `NOTHING LEFT TO TRY`. Declare a
+`local plateau` only when **qualitatively different** mechanisms aimed at the same scoped bottleneck have
+repeatedly failed — never from a few adjacent parameters. **local plateau ≠ task ceiling.** Past strategic
+conclusions become historical evidence, not law, once the evaluator, target, representation, architecture
+family, or budget changes. Historical records are never rewritten to fit a new policy.
+
+## 7. Discrepancies are research assets
+
+Actively hunt for: unexpected wins and regressions, metric reversals, a mechanism whose outcome depends on
+its parent, an improved composite with a *worsened* hypothesised metric, screening results that don't
+reproduce standalone, and equivalent-looking implementations that behave differently. Keep them in
+`out/ideas.json → discrepancies` with a diagnostic plan. Do not dismiss one as noise before judging its
+reproduction value. Breakthroughs come from contradictions more often than from confirmations.
+
+## 8. Serial evaluation
+
+`TIME_BUDGET` is **wall-clock**, so two runs sharing the single GPU each fit fewer epochs and stop being
+comparable — epoch count is the confound. Therefore **one scored run at a time**, enforced by
+`utils/evallock.py` (an advisory `flock`; the kernel releases it if the process dies). Never start a scored
+run while another run, a screening sweep, or a stale process holds the GPU. Screening may bypass the lock
+with `AADE_NO_EVAL_LOCK=1`, and its epoch counts are then **non-authoritative**. If a small composite
+difference rests mainly on how many epochs fit, re-measure parent and candidate under isolated conditions.
+
+## 9. State files & publication
+
+- `out/results.tsv` — authoritative per-run log: `commit  abs_rel  rmse  d1  memory_gb  status  description`.
+- `out/hypothesis.tsv` / `out/hypothesis_details.tsv` — per-study conclusions and full reasoning.
+- `studies.json` — mode, active study, HPO stage, `next_exp_id`, champion, backlog.
+- `out/ideas.json` — the live research portfolio + open discrepancies. Prune it; it is not a brainstorm dump.
+- `out/decision_log.jsonl` — append-only meaningful transitions.
+- `utils/research.py` — `status` · `composite` · `next-id` · `mode` · `log`.
+- `utils/report.py` — `qualitative` · `progress` · `readme` · `research` · `prune` · `all`.
+
+**The method must be committed before it is scored**, so the logged commit identifies the evaluated code.
+After each meaningful transition (experiment completed, study concluded, candidate promoted or dropped,
+mode changed, divergence checkpoint, discrepancy found), regenerate figures, update the README dashboard,
+commit, and **push**. Short, meaningful commit messages (`explore: probe STFT hop resolution`,
+`verify: reimplement multi-scale decode on clean parent`). Never force-push or rewrite history. Never push
+half-edited broken research code.
+
+The README's `RESEARCH` block is the human's live window into the run; the `RESULTS` block and figures are
+the performance dashboard. Keep both current.
+
+## 10. Never stop
+
+Do not pause to ask "should I keep going?". Do not stop for hypothesis failure, candidate drop, HPO
+exhaustion, local plateau, champion stagnation, or an experiment error. On failure: fix the implementation,
+restore the correct parent, conclude the study, and choose the next action — enter EXPLORE, run a
+falsification, inspect a discrepancy, SYNTHESIZE, or search an adjacent field. "Continue" never means
+repeating the same threshold; if the local question is exhausted, change the abstraction level of the
+question. The single GPU is busy ~1 h per run — schedule a wakeup, keep the next experiment staged, and
+resume across turns. The loop ends only when the human interrupts, or the environment is unrecoverable.
+
+The goal is not a leaderboard number. It is: **a high score, from a reproducible mechanism, with a clear
+explanation, defensible by ablation.**
