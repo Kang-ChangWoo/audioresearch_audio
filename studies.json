@@ -22,7 +22,13 @@
     "decision_rule": "Rank by the honest composite. The winning cell becomes the reference number RayDPT must beat. The qualitative figure shows ONE column per channel count, always the NON-LOG variant (operator instruction), regardless of which log setting wins the composite; the log variants stay in out/results.tsv. Gaps below ~0.015 composite are near-noise -> do not crown without confirmation."
   },
   "backlog": [
-    {"lineage": "raydpt-baseline", "type": "new", "idea": "Re-anchor RayDPT (train.py, 5ch, flip-aug) under the planar target; this is the number the batvision grid is compared against."},
+    {"lineage": "raydpt-baseline", "type": "new", "idea": "E4: re-anchor RayDPT (train.py, 5ch log, flip-aug) under the planar target; this is the number the batvision grid is compared against. Must run before any RayDPT improvement."},
+    {"lineage": "output-resolution", "type": "new", "priority": "high",
+     "idea": "RayDPT decodes at 64x128 and bilinear-upsamples 4x to 256x512; batvision's U-Net decodes to full res. Add a 128x256 DPT scale (ray bank Q128 + se1 skip from e1) so the final upsample is only 2x.",
+     "why": "MEASURED (24 samples, 6 scenes): the planar target is PIECEWISE-CONSTANT -- a wall perpendicular to a cube face has constant planar depth, so the map is flat regions separated by SHARP steps at depth discontinuities. A 4x bilinear upsample smears exactly those steps, and d1 (a +-25% threshold metric) punishes blurred edges hard. Highest-value structural fix under the planar target. Costs VRAM -- screen before committing."},
+    {"lineage": "geometric-head", "type": "new", "status": "REFUTED-BEFORE-RUN",
+     "idea": "Predict the smooth radial field R and emit D = R * linf, linf = max(|dx|,|dy|,|dz|) as a fixed buffer, so the net never learns the cube-edge creases.",
+     "why_refuted": "The premise is false. Measured grad-energy over 24 samples / 6 scenes: planar 0.01618, radial 0.01677; radial is smoother in only 17% of samples (mean ratio 1.035). PLANAR is already the smoother parameterisation -- for an axis-aligned room a wall perpendicular to a face has CONSTANT planar depth while radial curves as 1/cos. Reparameterising to radial would make the regression HARDER, not easier. Do not revive without new evidence."},
     {"lineage": "training-optimization", "type": "tune", "idea": "Re-validate the June optimisation envelope under the fixed loss + planar target: bf16 AMP + bs32 + lr4e-4 + warmup-cosine + EMA0.995."},
     {"lineage": "acoustic-representation", "type": "new", "idea": "Re-validate the June representation wins: multi-res STFT (fine-time echo delay) + interaural coherence (direct-vs-diffuse)."},
     {"lineage": "inference-time-tta", "type": "new", "idea": "Re-validate eval-time L/R-flip TTA."},
