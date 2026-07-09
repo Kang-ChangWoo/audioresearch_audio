@@ -115,8 +115,11 @@ def make_config(args):
             coarse_head_h=16,
             coarse_head_w=32,
             w_dense=1.0,
-            w_coarse_layout=1.0,
-            w_low=0.5,
+            # auxiliary LOW-FREQUENCY regularisers. program.md: free to tune or zero.
+            # At convergence these two carry ~58% of the total loss, so they are a
+            # research knob, not a constant (see idea I6).
+            w_coarse_layout=args.w_coarse_layout,
+            w_low=args.w_low,
         ),
         mode=Cfg(
             mode=args.mode,
@@ -727,6 +730,11 @@ def parse_args():
                    help='STFT hop. Sets the time-of-flight quantum: depth res = c*hop/(2*sr). '
                         '160 -> 0.567m; 40 -> 0.142m')
     p.add_argument('--stft-win', type=int, default=400, help='STFT window length')
+    # --- objective: auxiliary low-frequency regularisers (defaults = historical) ---
+    p.add_argument('--w-coarse-layout', type=float, default=1.0,
+                   help='weight of the 16x32 coarse-layout MAE (low frequency). 0 disables it.')
+    p.add_argument('--w-low', type=float, default=0.5,
+                   help='weight of the sigma=3 low-pass MAE (low frequency). 0 disables it.')
     p.add_argument('--raydpt-lite', type=lambda s: s == 'True', default=False,
                    help='2-scale (32,64) lite RayDPT variant')
 

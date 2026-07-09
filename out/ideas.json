@@ -64,7 +64,7 @@
     },
     {
       "id": "I5",
-      "status": "backlog",
+      "status": "inconclusive",
       "origin": "reading the code against the qualitative figure (predictions show quasi-periodic azimuthal banding)",
       "target_bottleneck": "RayDPT's DPT skip connections impose a FALSE spatial correspondence between the spectrogram's axes and the ERP's axes",
       "mechanism_family": "ray conditioning / encoder-decoder correspondence",
@@ -76,7 +76,41 @@
       "minimal_falsifiable_test": "DIAGNOSTIC FIRST, zero GPU: take the existing batvision predictions and FFT them along the azimuth axis; check for a spectral peak at period ~28.4 px (or its harmonics) that is absent in the GT's azimuthal spectrum. Only if the peak exists is the architecture change worth an hour. NOTE the diagnostic works on batvision too -- it also consumes the same (freq,time) image -- so it tests the REPRESENTATION's staircase, not RayDPT's skips. To isolate the skips, a second arm ablating se2/se3/se4 on RayDPT is needed.",
       "budget_risk": "low for the diagnostic (no GPU). Medium for the ablation: removing skips changes RayDPT's parameter count and may need its own re-tune.",
       "evidence_required": "an azimuthal spectral peak at the staircase period in predictions but not in GT; then a RayDPT skip-ablation that reduces it.",
-      "next_action": "run the zero-GPU azimuthal-FFT diagnostic on the E3 batvision predictions while E4 trains."
+      "next_action": "none. Do not spend GPU on the skip ablation on this rationale. Revive only with an independent reason.",
+      "diagnostic_result": "Pre-registered signature ABSENT. Azimuthal FFT of E3 batvision predictions (24 val samples): at the staircase frequency k=18 (period 28.4 px) the local prominence is 0.806 in PRED (a dip, not a peak) vs 1.041 in GT; pred/gt power ratio at k=18 is 0.05, the same as its neighbours k=17,19. No harmonic peaks at k=36/54 either. The nearest-upsampled 18-block staircase is NOT reproduced in the output.",
+      "scope_of_negative_evidence": "Refutes the predicted SIGNATURE (staircase banding), measured on batvision -- which also mixes encoder features into the decoder by pixel index via U-Net skips, so the absence of the peak is real evidence against 'pixel-index skips inject the staircase'. It does NOT test RayDPT's DPT skips directly, and it does not refute the underlying axis-mismatch concern, which now has NO supporting evidence and no cheap test. Per the pre-registered rule, the story as stated is wrong even if a skip ablation later helps for other reasons. Parked, not pursued."
+    },
+    {
+      "id": "I6",
+      "status": "backlog",
+      "origin": "metric decomposition + azimuthal spectrum of predictions (zero GPU)",
+      "target_bottleneck": "the objective devotes most of its gradient to low-frequency terms, so the model may be trained to be blurry",
+      "mechanism_family": "depth objective design",
+      "causal_distance": "mid",
+      "general_hypothesis": "A model fits what the loss measures. If most of the training signal comes from deliberately low-frequency views of the prediction, the model has little incentive to produce high-frequency structure, and will converge to a low-pass answer even when the target is sharp.",
+      "detailed_hypothesis": "composite_loss = 1.0*dense_MAE + 1.0*coarse_layout(16x32) + 0.5*low_pass(sigma=3). MEASURED at E3's convergence (mae 0.0392, lc 0.0360, llow 0.0370): the two low-frequency auxiliaries contribute 58.2% of the total loss (coarse 38.4%, low-pass 19.7%), leaving only 41.8% to the full-resolution dense term. program.md states lc/llow are auxiliary regularisers, free to tune or zero. Zeroing them should let the dense term dominate and restore high-frequency azimuthal content.",
+      "expected_metric_effect": "Predicted azimuthal power above k=6 rises toward GT's; d1 improves (blur is what a +-25% threshold metric punishes). If d1 falls, the auxiliaries were load-bearing regularisers, not a bias.",
+      "main_falsification_condition": "With w_coarse_layout=0 and w_low=0 the predicted azimuthal spectrum still collapses to k<=6. Then the objective is NOT the cause of the low-pass behaviour, and I7 (binaural angular under-determination) is the surviving explanation.",
+      "minimal_falsifiable_test": "one run of run_base.py (cheapest parent, E3 config) with --w-coarse-layout 0 --w-low 0; recompute the azimuthal spectrum with the same diagnostic. Requires exposing the two loss weights as CLI flags (they are currently hard-coded in make_config).",
+      "budget_risk": "none. Same architecture, same wall-clock.",
+      "evidence_required": "a measurable rise in predicted azimuthal power for k>6, together with a d1 that does not regress.",
+      "next_action": "expose w_coarse_layout / w_low as CLI flags, then queue the ablation after the I1 arms."
+    },
+    {
+      "id": "I7",
+      "status": "backlog",
+      "origin": "physics of the sensor, prompted by the azimuthal spectrum",
+      "target_bottleneck": "two microphones may fundamentally under-determine high azimuthal frequencies",
+      "mechanism_family": "sensing physics / angular resolution",
+      "causal_distance": "far",
+      "general_hypothesis": "Azimuth is recovered only from interaural differences between TWO receivers. A two-element array has a broad, smooth directional response, so fine angular structure in the scene maps onto almost identical binaural cues. If so, high azimuthal frequencies are not merely hard to learn -- they are close to unobservable, and no loss or decoder can conjure them.",
+      "detailed_hypothesis": "MEASURED: the predicted azimuthal power spectrum holds 97.4% of its non-DC power in k<=6 while GT holds 75.8%; the model over-represents k=4 (pred/gt 1.94), which corresponds to the four walls of a room -- genuine coarse geometry -- and under-represents everything finer (pred/gt ~0.05 for k>=17). The cutoff k~6 corresponds to ~60 degrees of azimuth, a plausible effective beamwidth for a two-element array.",
+      "expected_metric_effect": "If true, d1 is capped by angular observability, and the productive levers are the REPRESENTATION (cues that carry more angular information) rather than the decoder or the loss.",
+      "main_falsification_condition": "I6's ablation restores high-frequency azimuthal content. Then the low-pass behaviour was an artefact of the objective, not of the sensor, and I7 is dropped.",
+      "minimal_falsifiable_test": "I6's ablation is the discriminating experiment for BOTH ideas: it cleanly separates 'the loss made it blurry' from 'the sensor cannot see it'. Run I6 first; I7 needs no separate run to be tested.",
+      "budget_risk": "none for now (tested via I6).",
+      "evidence_required": "survives if and only if I6's ablation fails to restore high-frequency content.",
+      "next_action": "none directly -- I7 is decided by I6's outcome. Do NOT call this a task ceiling; it is a scoped hypothesis about angular observability with two receivers."
     }
   ],
   "discrepancies": [
@@ -108,11 +142,12 @@
     },
     {
       "id": "D4",
-      "status": "open",
+      "status": "resolved",
       "observation": "Predicted depth maps in out/display/qualitative.png are low-frequency blobs showing quasi-periodic banding along azimuth, while the GT is sharp and piecewise-constant. The 5ch predictions carry visibly more azimuthal structure than the 2ch ones.",
       "why_it_matters": "The input's width axis is STFT TIME with only 18 distinct frames, nearest-upsampled 28.4x into 512 columns -- a staircase. If the predicted banding period matches that staircase, the model is reproducing an artefact of the interpolation rather than scene geometry, and the nearest-neighbour upsample in _features() (editable research logic) is itself a defect. The extra 5ch structure is consistent with S0's finding that interaural cues buy angular assignment.",
       "diagnostic_value": "Distinguishes two very different stories: (a) the model is under-fitting and simply produces blurry output; (b) the representation injects a spatial artefact the model faithfully reproduces. These call for opposite interventions.",
-      "next_action": "azimuthal FFT of predictions vs GT (zero GPU). Feeds I5."
+      "next_action": "none. Superseded by I6 vs I7.",
+      "resolution": "The banding is NOT an interpolation artefact. Azimuthal FFT (24 val samples, E3 batvision): no peak at the 18-block staircase frequency k=18 (prominence 0.806, i.e. a dip) nor at its harmonics. What I read as banding is the k=4 component -- the four walls of a room -- which the model OVER-represents (pred/gt 1.94). The real characterisation: the model is a LOW-PASS predictor, holding 97.4% of its azimuthal power in k<=6 versus GT's 75.8%, and only ~5% of GT's power at k>=17. This resolves D4 and spawns two competing explanations, I6 (the objective is 58% low-frequency) and I7 (two microphones under-determine fine azimuth), discriminated by I6's ablation."
     }
   ]
 }
