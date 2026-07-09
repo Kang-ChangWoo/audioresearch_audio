@@ -295,11 +295,12 @@ def _pad_sphere(t, pad):
 class LocalSphericalAttention(nn.Module):
     """Windowed ray<->ray attention with a geometric bias.
 
-    The neighbourhood is gathered by SLICING a once-padded tensor, not by F.unfold.
-    unfold materialises (B, C*win*win, H*W) -- 1.8 GB for k and v at 64x128, batch 16 --
-    which dominated both VRAM and epoch time (I8). Slicing costs one pad; the per-offset
-    views are free, and only the (B, heads, K, H, W) logits are materialised (~19 MB).
-    Mathematically identical to the unfold version (verified bit-close, see I8).
+    The neighbourhood is a STRIDED VIEW of a once-padded tensor: no copy, no unfold, no
+    per-offset loop. F.unfold materialised (B, C*win*win, H*W); a per-offset accumulate loop
+    (my first attempt) was worse still -- it retained win*win intermediates for autograd and
+    measured 30.9 GB at batch 16, versus 16.2 GB for unfold. A view costs neither memory nor
+    kernel launches, and the two einsums are single fused ops.
+    Mathematically identical to the unfold version (verified forward + backward, see I8).
     """
     def __init__(self, dim, heads, H, W, win=5):
         super().__init__()
@@ -310,26 +311,30 @@ class LocalSphericalAttention(nn.Module):
         self.register_buffer("geom", _geom_bias_feats(H, W, win))          # (H,K,3)
         self.bias_mlp = nn.Sequential(nn.Linear(3, 64), nn.GELU(), nn.Linear(64, heads))
 
+    @staticmethod
+    def _neigh(t, B, h, dh, H, W, win):
+        """(B,C,H+2p,W+2p) -> (B,h,dh,win,win,H,W) strided VIEW: the window axes reuse the
+        spatial strides, which is exactly what a sliding window is. No copy."""
+        Hp, Wp = t.shape[-2:]
+        t = t.view(B, h, dh, Hp, Wp)
+        sB, sh, sd, sH, sW = t.stride()
+        return t.as_strided((B, h, dh, win, win, H, W), (sB, sh, sd, sH, sW, sH, sW))
+
     def forward(self, x):
         B, C, H, W = x.shape
         p, win = self.win // 2, self.win
         q, k, v = self.to_qkv(x).chunk(3, 1)
         q = q.view(B, self.h, self.dh, H, W)
-        kp, vp = _pad_sphere(k, p), _pad_sphere(v, p)                       # one pad, then views
+        kw = self._neigh(_pad_sphere(k, p), B, self.h, self.dh, H, W, win)
+        vw = self._neigh(_pad_sphere(v, p), B, self.h, self.dh, H, W, win)
 
-        logits = []
-        for dr in range(win):
-            for dc in range(win):
-                ks = kp[..., dr:dr + H, dc:dc + W].view(B, self.h, self.dh, H, W)
-                logits.append((q * ks).sum(2))                              # (B,nh,H,W)
-        attn = torch.stack(logits, dim=2) * self.scale                      # (B,nh,K,H,W)
-        bias = self.bias_mlp(self.geom).permute(2, 1, 0)                    # (nh,K,H)
+        attn = torch.einsum('bndhw,bndrshw->bnrshw', q, kw) * self.scale     # (B,nh,win,win,H,W)
+        attn = attn.reshape(B, self.h, win * win, H, W)
+        bias = self.bias_mlp(self.geom).permute(2, 1, 0)                     # (nh,K,H)
         attn = (attn + bias[None, :, :, :, None]).softmax(dim=2)
+        attn = attn.view(B, self.h, win, win, H, W)
 
-        out = x.new_zeros(B, self.h, self.dh, H, W)
-        for idx, (dr, dc) in enumerate((dr, dc) for dr in range(win) for dc in range(win)):
-            vs = vp[..., dr:dr + H, dc:dc + W].view(B, self.h, self.dh, H, W)
-            out = out + attn[:, :, idx].unsqueeze(2) * vs
+        out = torch.einsum('bnrshw,bndrshw->bndhw', attn, vw)
         return x + self.proj(out.reshape(B, C, H, W))
 
 

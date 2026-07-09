@@ -87,7 +87,7 @@
     },
     {
       "id": "I6",
-      "status": "backlog",
+      "status": "dropped",
       "origin": "metric decomposition + azimuthal spectrum of predictions (zero GPU)",
       "target_bottleneck": "the objective devotes most of its gradient to low-frequency terms, so the model may be trained to be blurry",
       "mechanism_family": "depth objective design",
@@ -99,11 +99,14 @@
       "minimal_falsifiable_test": "one run of run_base.py (cheapest parent, E3 config) with --w-coarse-layout 0 --w-low 0; recompute the azimuthal spectrum with the same diagnostic. Requires exposing the two loss weights as CLI flags (they are currently hard-coded in make_config).",
       "budget_risk": "none. Same architecture, same wall-clock.",
       "evidence_required": "a measurable rise in predicted azimuthal power for k>6, together with a d1 that does not regress.",
-      "next_action": "expose w_coarse_layout / w_low as CLI flags, then queue the ablation after the I1 arms."
+      "next_action": "none. Optionally delete the aux terms for simplicity (neutral).",
+      "why_dropped": "REFUTED. Zeroing BOTH low-frequency auxiliaries -- 58.2% of the gradient at convergence -- changed almost nothing. E7 (aux off) composite 1.8613 vs E3 (aux on) 1.8567: delta +0.0046, BELOW sigma~0.008. The azimuthal spectrum barely moved: high-frequency power (k>=7) went from 10.8% of GT's to 12.3%. Removing more than half the training signal did not un-blur the model. The objective is NOT the cause of the low-pass behaviour.",
+      "secondary_finding": "The two auxiliaries are INERT, not harmful: they consume 58% of the loss and buy nothing measurable. Classification: redundant mechanism (neutral result). They are therefore a free simplification candidate -- program.md: a gain from deleting code is the best kind -- but deleting them is a cosmetic change, not a research result.",
+      "scope_of_negative_evidence": "Refutes the objective as the cause of low-pass behaviour for the batvision reference, at this error level, under this budget. It does not say auxiliary losses are useless in general, and it does not test them on RayDPT."
     },
     {
       "id": "I7",
-      "status": "backlog",
+      "status": "candidate",
       "origin": "physics of the sensor, prompted by the azimuthal spectrum",
       "target_bottleneck": "two microphones may fundamentally under-determine high azimuthal frequencies",
       "mechanism_family": "sensing physics / angular resolution",
@@ -115,7 +118,9 @@
       "minimal_falsifiable_test": "I6's ablation is the discriminating experiment for BOTH ideas: it cleanly separates 'the loss made it blurry' from 'the sensor cannot see it'. Run I6 first; I7 needs no separate run to be tested.",
       "budget_risk": "none for now (tested via I6).",
       "evidence_required": "survives if and only if I6's ablation fails to restore high-frequency content.",
-      "next_action": "none directly -- I7 is decided by I6's outcome. Do NOT call this a task ceiling; it is a scoped hypothesis about angular observability with two receivers."
+      "next_action": "Do not chase high-frequency power as a goal. Re-test the observability claim once RayDPT converges (E7), using I11's contrast.",
+      "support": "Survives by elimination, per the pre-registered rule. The low-pass character is ROBUST to (a) a 58% change in the objective (I6: high-freq 10.8% -> 12.3% of GT) and (b) a 6.2x change in temporal resolution (E6). Two very different interventions upstream and downstream both fail to restore fine azimuthal structure, which is what an observability limit looks like.",
+      "caveat_strong_form": "The STRONG form -- 'high azimuthal frequencies are unobservable, so recovering them is the goal' -- is itself now suspect, because E6 has 29.7% LESS high-frequency power than E2 yet a BETTER d1 (0.6005 vs 0.5938). Sharpness and d1 are not the same thing: d1 rewards each pixel landing within +-25% of truth, which a well-centred smooth field can do better than a wrongly-placed sharp one. So 'restore high frequencies' may be the wrong objective entirely."
     },
     {
       "id": "I8",
@@ -169,6 +174,23 @@
       "evidence_required": "RMSE gain comparable to E5's, with information held fixed.",
       "next_action": "queued in utils/run_queue3.sh after the I6/I7 discriminator.",
       "strengthened_by": "The composite is monotone in staircase block width across E2/E5/E6 (28.4px -> 7.2px -> 2.9px gives 1.8646 -> 1.8514 -> 1.8379), while the two runs' other properties (smear, frequency resolution) move incoherently. Staircase fineness is the only variable that tracks the score across all three."
+    },
+    {
+      "id": "I11",
+      "status": "backlog",
+      "origin": "asking what is upstream of BOTH the objective and the representation, after I6 was refuted",
+      "target_bottleneck": "batvision reconstructs the whole 256x512 ERP map through a 1x2 bottleneck",
+      "mechanism_family": "encoder-decoder capacity / information bottleneck",
+      "causal_distance": "mid",
+      "general_hypothesis": "A low-pass output can come from a narrow waist in the network rather than from the loss, the input, or the sensor. If every prediction must pass through a handful of numbers, only the coarsest structure survives.",
+      "detailed_hypothesis": "batvision's unet_256 runs all 8 downs to a 1x2x512 bottleneck: 1024 numbers must reconstruct 131072 pixels. RayDPT has NO such waist -- it decodes per-ray from e4 (16x32) plus cross-attention. If the waist causes the low-pass behaviour, a CONVERGED RayDPT should hold materially more high-frequency azimuthal power than batvision; if it does not, the limit lies further upstream (I7, angular observability).",
+      "expected_metric_effect": "a converged RayDPT's azimuthal power at k>=7 should exceed batvision's 19% of GT. Note per I7's caveat this need NOT improve d1.",
+      "main_falsification_condition": "A converged RayDPT low-passes just as hard as batvision -> the waist is not the cause, and I7 strengthens.",
+      "minimal_falsifiable_test": "Re-run the azimuthal-spectrum diagnostic on RayDPT E7 (25 epochs) versus batvision E3. Zero extra GPU: E7 is already queued for the throughput study.",
+      "budget_risk": "none -- rides on an experiment already scheduled.",
+      "evidence_required": "the spectrum contrast on a CONVERGED RayDPT.",
+      "preliminary": "On the 5-epoch E4 RayDPT holds LESS high-frequency power than batvision (13.7% vs 19.0% of GT), which would argue against the waist -- but E4 never converged, so this is confounded by training and proves nothing. Deferred to E7.",
+      "next_action": "run the diagnostic the moment E7 lands."
     }
   ],
   "discrepancies": [
@@ -230,6 +252,14 @@
       "why_it_matters": "If temporal resolution set range accuracy, B should own RMSE. It does not; A does, and A did not change resolution at all. Meanwhile B, which also sacrifices frequency resolution (win 400 -> 64), buys ANGLE. That inverts the physical story: sharper transients seem to help azimuth cues (ILD/IPD are read across frequency and time), while range accuracy responds to something in the sampling/interpolation of the time axis.",
       "diagnostic_value": "Separates 'the score improved' from 'the mechanism is real' -- the composite improved in both arms while the pre-registered mechanism failed in both. The one variable monotone with the score across all three runs is staircase block width, which I10 isolates.",
       "next_action": "I10 first. If bilinear at hop=160 recovers arm A's RMSE gain, then A is explained by interpolation and B's d1 gain needs its own explanation (candidate: shorter windows sharpen transients, aiding IPD-based azimuth)."
+    },
+    {
+      "id": "D8",
+      "status": "open",
+      "observation": "E6 holds 29.7% LESS high-frequency azimuthal power than E2 (0.0232 vs 0.0331) yet has a BETTER d1 (0.6005 vs 0.5938). Separately, removing 58% of the gradient (E7 vs E3) barely changed the spectrum or the composite.",
+      "why_it_matters": "It breaks the assumption -- mine, unstated until now -- that d1 improves because predictions get sharper. d1 counts pixels within +-25% of truth, and a well-centred smooth field beats a mis-placed sharp one. So the low-pass character of these models may be largely IRRELEVANT to the metric, and 'restore high frequencies' is probably the wrong research goal.",
+      "diagnostic_value": "Redirects the whole low-pass line of inquiry. The question is not 'why is the prediction blurry' but 'why is the smooth field mis-centred', i.e. what sets per-ray depth accuracy. It also warns that spectral diagnostics, though cheap, do not proxy the metric.",
+      "next_action": "Stop optimising for spectral sharpness. Keep the spectrum as a MECHANISM probe (I11) rather than a goal."
     }
   ]
 }

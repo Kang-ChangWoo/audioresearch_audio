@@ -27,12 +27,14 @@ N_TRAIN = 28800            # training samples (informational; epoch time is extr
 BUDGET = train.TIME_BUDGET
 
 
-def bench(batch, iters, amp, device):
+def bench(batch, iters, amp, device, compile_model=False):
     """Time a real train step: forward + composite_loss + backward + step."""
     sys.argv = ['train.py', '--mode', 'train', '--batch-size', str(batch), '--amp', amp]
     cfg = train.make_config(train.parse_args())
     mcfg = train.build_model_cfg(cfg)
     model = train.build_model(cfg).to(device).train()
+    if compile_model:
+        model = torch.compile(model)
     opt = torch.optim.AdamW(model.parameters(), lr=3e-4)
     amp_on = (amp == 'bf16')
 
@@ -41,8 +43,9 @@ def bench(batch, iters, amp, device):
     mask = (gt > 0.05).float()
 
     torch.cuda.reset_peak_memory_stats()
-    for i in range(iters + 2):                        # 2 warm-up iters (cudnn autotune, alloc)
-        if i == 2:
+    warm = 12 if compile_model else 2                 # torch.compile needs graph capture
+    for i in range(iters + warm):                     # warm-up (cudnn autotune, alloc, compile)
+        if i == warm:
             torch.cuda.synchronize(); t0 = time.time()
         with torch.autocast('cuda', dtype=torch.bfloat16, enabled=amp_on):
             out = model(spec)
@@ -64,6 +67,7 @@ def main():
     p.add_argument('--iters', type=int, default=8)
     p.add_argument('--batches', type=int, nargs='+', default=[16, 32, 48, 64])
     p.add_argument('--amp', nargs='+', default=['off', 'bf16'])
+    p.add_argument('--compile', action='store_true', help='also try torch.compile (pure speed, no mechanism change)')
     p.add_argument('--vram-cap-gb', type=float, default=44.0, help='leave headroom on the 49GB card')
     p.add_argument('--target-epochs', type=int, default=25)
     a = p.parse_args()
@@ -78,29 +82,35 @@ def main():
               f'{"epochs in 1h":>13}')
         print('-' * 56)
         best = None
-        for amp in a.amp:
-            for b in a.batches:
+        combos = [(amp, b, False) for amp in a.amp for b in a.batches]
+        if a.compile:
+            combos += [(amp, b, True) for amp in a.amp for b in a.batches]
+        for amp, b, comp in combos:
                 try:
-                    dt, peak = bench(b, a.iters, amp, device)
+                    dt, peak = bench(b, a.iters, amp, device, compile_model=comp)
                 except torch.cuda.OutOfMemoryError:
                     torch.cuda.empty_cache()
-                    print(f'{amp:>5} {b:>6} {"OOM":>8}')
+                    print(f'{amp:>5} {b:>6} {"OOM":>8}{"  compiled" if comp else ""}')
+                    continue
+                except Exception as e:
+                    torch.cuda.empty_cache()
+                    print(f'{amp:>5} {b:>6}  FAILED ({type(e).__name__}: {str(e)[:60]})')
                     continue
                 sec_ep = dt * (N_TRAIN / b)
                 eps = BUDGET / sec_ep
-                flag = ''
+                flag = '  compiled' if comp else ''
                 if peak > a.vram_cap_gb:
-                    flag = '  (over VRAM cap)'
+                    flag += '  (over VRAM cap)'
                 elif best is None or sec_ep < best[0]:
-                    best = (sec_ep, b, amp, peak, eps)
-                    flag = '  <- best so far'
+                    best = (sec_ep, b, amp, peak, eps, comp)
+                    flag += '  <- best so far'
                 print(f'{amp:>5} {b:>6} {dt:8.3f} {peak:8.2f} {sec_ep:9.1f} {eps:13.1f}{flag}')
 
     if best is None:
         raise SystemExit('no configuration fit the VRAM cap')
-    sec_ep, b, amp, peak, eps = best
+    sec_ep, b, amp, peak, eps, comp = best
     print('-' * 56)
-    print(f'\nchosen: batch={b} amp={amp}  ->  {sec_ep:.1f} s/epoch, ~{eps:.1f} epochs in the 1h budget')
+    print(f'\nchosen: batch={b} amp={amp} compile={comp}  ->  {sec_ep:.1f} s/epoch, ~{eps:.1f} epochs in the 1h budget')
     print(f'peak {peak:.2f} GB')
     if eps < a.target_epochs:
         print(f'!! still short of the {a.target_epochs}-epoch target '

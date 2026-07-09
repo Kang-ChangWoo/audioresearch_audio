@@ -144,7 +144,19 @@ def build_qualitative(n_scenes=7, out_path=None):
             specs = torch.stack([ds_m[i]['spec'] for i in picks]).to(dev)
             model = module.build_model(cfg_m).to(dev).eval()
             state = torch.load(ckpt, map_location=dev, weights_only=False)
-            model.load_state_dict(state['state_dict'])
+            # A checkpoint may carry EXTRA keys the current model no longer has (I9 deleted
+            # RayDPT's dead e5..e8 tail). Extra keys are inert and are dropped loudly. MISSING
+            # keys are not: they would silently render a partly-random model as if it were real.
+            sd, own = state['state_dict'], model.state_dict()
+            missing = [k for k in own if k not in sd]
+            extra = [k for k in sd if k not in own]
+            if missing:
+                raise RuntimeError(f'checkpoint lacks {len(missing)} keys the model needs '
+                                   f'(e.g. {missing[:2]}) -- refusing to render a partial model')
+            if extra:
+                print(f'[report] {label}: dropping {len(extra)} stale checkpoint keys '
+                      f'(e.g. {extra[0]})', flush=True)
+            model.load_state_dict({k: v for k, v in sd.items() if k in own})
             with torch.no_grad():
                 D = model(specs)['D'][:, 0].cpu().numpy() * MAX_DEPTH
             preds[label] = [D[k] for k in range(len(picks))]
