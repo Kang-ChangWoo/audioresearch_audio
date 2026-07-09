@@ -17,8 +17,14 @@
     "detailed_hypothesis": "log1p compression equalises the dynamic range between the direct sound and the far-field echo tail, so it should help a model that must read weak late reflections to place distant surfaces -> log wins, and it should help the 2ch stack MORE than the 5ch stack (in 5ch, ILD already supplies a log-domain ratio, so part of the compression benefit is redundant). Adding ILD+IPD gives explicit interaural level/phase, which is where azimuth and hence per-direction depth structure lives -> 5ch beats 2ch at both log settings.",
     "experiment_note": "2x2 grid on run_base.py, 1h each, sequential on one GPU: {2ch=[L,R], 5ch=[L,R,ILD,cosIPD,sinIPD]} x {use_log True, False}. E0 batvision_2ch_nolog, E1 batvision_2ch_log, E2 batvision_5ch_nolog, E3 batvision_5ch_log. Driver: utils/run_batvision_grid.sh.",
     "hpo_stage": "structural-screen",
-    "hpo_runs_used": 0,
-    "runs": [],
+    "hpo_runs_used": 1,
+    "runs": [
+      {"exp_id": "E0", "name": "batvision_2ch_nolog", "abs_rel": 0.4143, "rmse": 1.3186, "d1": 0.5785,
+       "composite": 1.8854, "best_epoch": 14, "epochs_ran": 26, "vram_gb": 2.4, "status": "keep"}
+    ],
+    "observations": [
+      "E0: the composite peaks at epoch 14 of 26 and then DEGRADES -- val loss rises monotonically 0.1871 -> 0.1925 over the last 5 epochs, RMSE 1.347 -> 1.382, d1 0.5827 -> 0.5758. The batvision U-Net (54.4M params) OVERFITS well inside the 1-hour budget. Compounding it: the cosine schedule is sized for --epochs 40 but only ~26 fit in the budget, so LR never fully anneals and the run ends mid-schedule at a degraded point. Best-checkpoint selection protects the reported number, but it means (a) the extra epochs are wasted compute, and (b) a fair comparison of any config must go through the best checkpoint, never the last. FOLLOW-UP for the training-optimization lineage: set --epochs to what actually fits (~24) so cosine anneals to zero inside the budget, and/or add weight decay / early stop. Do NOT change this mid-grid -- all four cells must share one schedule."
+    ],
     "decision_rule": "Rank by the honest composite. The winning cell becomes the reference number RayDPT must beat. The qualitative figure shows ONE column per channel count, always the NON-LOG variant (operator instruction), regardless of which log setting wins the composite; the log variants stay in out/results.tsv. Gaps below ~0.015 composite are near-noise -> do not crown without confirmation."
   },
   "backlog": [
@@ -29,6 +35,8 @@
     {"lineage": "geometric-head", "type": "new", "status": "REFUTED-BEFORE-RUN",
      "idea": "Predict the smooth radial field R and emit D = R * linf, linf = max(|dx|,|dy|,|dz|) as a fixed buffer, so the net never learns the cube-edge creases.",
      "why_refuted": "The premise is false. Measured grad-energy over 24 samples / 6 scenes: planar 0.01618, radial 0.01677; radial is smoother in only 17% of samples (mean ratio 1.035). PLANAR is already the smoother parameterisation -- for an axis-aligned room a wall perpendicular to a face has CONSTANT planar depth while radial curves as 1/cos. Reparameterising to radial would make the regression HARDER, not easier. Do not revive without new evidence."},
+    {"lineage": "training-optimization", "type": "tune", "priority": "high",
+     "idea": "Match --epochs to what the 1-hour budget actually fits (~24-26) so the cosine schedule anneals to zero inside the budget instead of being truncated mid-schedule. Observed on E0: best at epoch 14/26, then 12 epochs of overfitting (val loss 0.1871 -> 0.1925). Pair with weight decay / EMA."},
     {"lineage": "training-optimization", "type": "tune", "idea": "Re-validate the June optimisation envelope under the fixed loss + planar target: bf16 AMP + bs32 + lr4e-4 + warmup-cosine + EMA0.995."},
     {"lineage": "acoustic-representation", "type": "new", "idea": "Re-validate the June representation wins: multi-res STFT (fine-time echo delay) + interaural coherence (direct-vs-diffuse)."},
     {"lineage": "inference-time-tta", "type": "new", "idea": "Re-validate eval-time L/R-flip TTA."},
