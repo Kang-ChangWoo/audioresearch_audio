@@ -120,6 +120,10 @@ Figures live in `out/display/` (tracked) and are embedded in `README.md`:
 - `readme` → refreshes the `<!-- RESULTS:START/END -->` metrics table in `README.md`.
 - `all [--prune]` runs all three. Regenerate after each run.
 
+The **bottom of `README.md` holds a network flowchart** — a Mermaid `flowchart TD` (top-to-bottom
+block diagram) of the shared audio front-end and the two decoder heads (BatVision reference U-Net /
+RayDPT my-model). Keep it in sync when the architecture changes.
+
 ## Image retention
 Per-epoch dumps in `outputs/<exp>/visualizations/` are **git-ignored** (never committed) and pruned for
 disk: `python utils/report.py prune` keeps the earliest (initial) epoch, a few evenly-spaced milestones,

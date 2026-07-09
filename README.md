@@ -38,3 +38,22 @@ running best highlighted):
 |---|---|---|
 | 2026-June (archived) | ~2.030 | multi-res STFT + interaural coherence + TTA |
 | 2026-July (this) | — | BatVision reference + named-cue inputs + fixed coarse/low loss target |
+
+## Network flowchart
+
+Shared audio front-end, then two decoder heads — the BatVision reference (plain U-Net) and
+my model RayDPT (ray-conditioned):
+
+```mermaid
+flowchart TD
+    A["Binaural echo waveform (2ch)"] --> B["STFT"]
+    B --> C["Named cue stack (in_ch)<br/>logL/L · logR/R · ILD · cosIPD · sinIPD"]
+    C --> D["UNet8 encoder<br/>256x512 → 1x2 · skips e2/e3/e4"]
+    D --> E{"decoder"}
+    E -->|reference| F["BatVision U-Net<br/>ConvTranspose decoder + skips"]
+    E -->|my model| G["RayBank ray queries ×<br/>audio cross-attention (scales 16/32/64)"]
+    G --> H["DPT fusion +<br/>local spherical window attention"]
+    F --> I["Sigmoid head"]
+    H --> I
+    I --> J["ERP radial depth<br/>256x512, [0,1] × max_depth"]
+```

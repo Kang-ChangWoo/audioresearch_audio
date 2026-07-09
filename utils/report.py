@@ -59,24 +59,32 @@ MAX_DEPTH = 10.0
 def _model_registry():
     import run_base
     import train
+    # (label, module, checkpoint, feat_kwargs). Each model predicts on ITS OWN input
+    # representation (channel count / log), so 2ch and 5ch models coexist in one figure.
     return [
-        ('batvision',           run_base, os.path.join(ROOT, 'checkpoints', 'batvision', 'best_model.pth')),
-        ('best1 (my model)',    train,    os.path.join(ROOT, 'checkpoints', 'best1', 'best_model.pth')),
-        ('best2 (my model)',    train,    os.path.join(ROOT, 'checkpoints', 'best2', 'best_model.pth')),
+        ('batvision (2ch)', run_base,
+         os.path.join(ROOT, 'checkpoints', 'batvision', 'best_model.pth'),
+         dict(use_log=False, feat_ILD=False, feat_cosIPD=False, feat_sinIPD=False)),   # [L,R]
+        ('batvision (5ch)', run_base,
+         os.path.join(ROOT, 'checkpoints', 'batvision_5ch_log', 'best_model.pth'),
+         dict()),                                                                       # 5ch, log on
+        ('current (my model)', train,
+         os.path.join(ROOT, 'checkpoints', 'raydpt_5chflip', 'best_model.pth'),
+         dict()),                                          # RayDPT, 5ch log on (adjust if cues change)
     ]
 
 
-def _default_cfg():
-    """Nested cfg with the default representation (5ch), for dataset + model build."""
+def _args(**over):
+    """CLI-args namespace for run_base/train make_config (defaults = 5ch, log on)."""
     from types import SimpleNamespace
-    import run_base
-    args = SimpleNamespace(
-        dataset_dir='/home/rvi-lab/workspace/sound-spaces/dataset_simplified',
-        mode='test', batch_size=4, epochs=1, lr=3e-4, optimizer='AdamW',
-        num_workers=0, checkpoint=None, flip_aug=True, experiment_name='batvision',
-        eval_on='val', vis_every=0, use_log=True, feat_L=True, feat_R=True,
-        feat_ILD=True, feat_cosIPD=True, feat_sinIPD=True, max_iters=0, max_val_batches=0)
-    return run_base.make_config(args)
+    a = dict(dataset_dir='/home/rvi-lab/workspace/sound-spaces/dataset_simplified',
+             mode='test', batch_size=4, epochs=1, lr=3e-4, optimizer='AdamW',
+             num_workers=0, checkpoint=None, flip_aug=True, experiment_name='x',
+             eval_on='val', vis_every=0, use_log=True, feat_L=True, feat_R=True,
+             feat_ILD=True, feat_cosIPD=True, feat_sinIPD=True,
+             raydpt_lite=False, max_iters=0, max_val_batches=0)
+    a.update(over)
+    return SimpleNamespace(**a)
 
 
 # ==================================================================
@@ -84,47 +92,57 @@ def _default_cfg():
 # ==================================================================
 def build_qualitative(n_scenes=7, out_path=None):
     import torch
+    import run_base
     from prepare import SoundSpacesDataset, load_gt_rgb
 
     out_path = out_path or os.path.join(DISPLAY_DIR, 'qualitative.png')
     os.makedirs(DISPLAY_DIR, exist_ok=True)
-    cfg = _default_cfg()
     dev = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    ds = SoundSpacesDataset(cfg, split='val')
+
+    # base dataset (any representation) for GT / keys / scene picks — all config-independent
+    base_ds = SoundSpacesDataset(run_base.make_config(_args()), split='val')
+    dataset_dir, depth_type = base_ds.root_dir, base_ds.depth_type
 
     # pick the first sample of the first n_scenes distinct scenes
     picks, seen = [], set()
-    for i, (scene, idx) in enumerate(ds.samples):
+    for i, (scene, idx) in enumerate(base_ds.samples):
         if scene not in seen:
             seen.add(scene); picks.append(i)
         if len(picks) >= n_scenes:
             break
 
-    items = [ds[i] for i in picks]
-    specs = torch.stack([it['spec'] for it in items]).to(dev)
-    gts = [it['depth'][0].numpy() * MAX_DEPTH for it in items]
-    keys = [it['key'] for it in items]
+    gts, keys = [], []
+    for i in picks:
+        it = base_ds[i]
+        gts.append(it['depth'][0].numpy() * MAX_DEPTH); keys.append(it['key'])
 
-    # predictions per registered model (None if checkpoint missing)
+    # each model predicts on ITS OWN input representation (build a matching dataset + cfg)
     models = _model_registry()
-    preds = {}   # label -> list-over-scenes of pred array or None
-    for label, module, ckpt in models:
+    preds = {}          # label -> list-over-scenes of pred array or None
+    ds_cache = {}
+    for label, module, ckpt, feat in models:
         if not os.path.exists(ckpt):
-            preds[label] = [None] * len(items)
+            preds[label] = [None] * len(picks)
             continue
         try:
-            model = module.build_model(cfg).to(dev).eval()
+            cfg_m = module.make_config(_args(**feat))
+            fkey = tuple(sorted(feat.items()))
+            if fkey not in ds_cache:
+                ds_cache[fkey] = SoundSpacesDataset(cfg_m, split='val')
+            ds_m = ds_cache[fkey]
+            specs = torch.stack([ds_m[i]['spec'] for i in picks]).to(dev)
+            model = module.build_model(cfg_m).to(dev).eval()
             state = torch.load(ckpt, map_location=dev, weights_only=False)
             model.load_state_dict(state['state_dict'])
             with torch.no_grad():
                 D = model(specs)['D'][:, 0].cpu().numpy() * MAX_DEPTH
-            preds[label] = [D[k] for k in range(len(items))]
+            preds[label] = [D[k] for k in range(len(picks))]
         except Exception as e:
             print(f'[report] {label}: load/predict failed ({e}); rendering pending', flush=True)
-            preds[label] = [None] * len(items)
+            preds[label] = [None] * len(picks)
 
     col_titles = ['RGB', 'GT depth'] + [m[0] for m in models]
-    ncol, nrow = len(col_titles), len(items)
+    ncol, nrow = len(col_titles), len(picks)
     fig, ax = plt.subplots(nrow, ncol, figsize=(2.6 * ncol, 2.4 * nrow), squeeze=False)
 
     def _placeholder(a, text):
@@ -132,17 +150,18 @@ def build_qualitative(n_scenes=7, out_path=None):
         a.text(0.5, 0.5, text, ha='center', va='center', fontsize=9,
                color='0.4', transform=a.transAxes)
 
-    for r, it in enumerate(items):
+    for r in range(nrow):
         scene = keys[r].split('/')[0]
         # RGB (absent in dataset_simplified -> N/A)
-        rgb = load_gt_rgb(cfg.dataset.dataset_dir, scene, keys[r].split('/')[1],
-                          cfg.dataset.depth_type, gts[r].shape[0], gts[r].shape[1])
+        rgb = load_gt_rgb(dataset_dir, scene, keys[r].split('/')[1],
+                          depth_type, gts[r].shape[0], gts[r].shape[1])
         if rgb is not None:
             ax[r][0].imshow(rgb)
         else:
             _placeholder(ax[r][0], 'no RGB\n(simplified set)')
         ax[r][1].imshow(gts[r], vmin=0, vmax=MAX_DEPTH, cmap='turbo')
-        for c, (label, _, _) in enumerate(models):
+        for c, entry in enumerate(models):
+            label = entry[0]
             p = preds[label][r]
             if p is None:
                 _placeholder(ax[r][2 + c], f'{label}\n(pending)')
