@@ -61,16 +61,20 @@ def _model_registry():
     import train
     # (label, module, checkpoint, feat_kwargs). Each model predicts on ITS OWN input
     # representation (channel count / log), so 2ch and 5ch models coexist in one figure.
+    # The batvision reference is shown as exactly ONE column per channel count, always the
+    # NON-LOG (raw magnitude) variant; the log variants are still trained and logged to
+    # out/results.tsv, they just don't get a column here.
+    only_lr = dict(feat_ILD=False, feat_cosIPD=False, feat_sinIPD=False)
     return [
-        ('batvision (2ch)', run_base,
-         os.path.join(ROOT, 'checkpoints', 'batvision', 'best_model.pth'),
-         dict(use_log=False, feat_ILD=False, feat_cosIPD=False, feat_sinIPD=False)),   # [L,R]
-        ('batvision (5ch)', run_base,
-         os.path.join(ROOT, 'checkpoints', 'batvision_5ch_log', 'best_model.pth'),
-         dict()),                                                                       # 5ch, log on
+        ('batvision (2ch, nolog)', run_base,
+         os.path.join(ROOT, 'checkpoints', 'batvision_2ch_nolog', 'best_model.pth'),
+         dict(use_log=False, **only_lr)),                    # [L, R]
+        ('batvision (5ch, nolog)', run_base,
+         os.path.join(ROOT, 'checkpoints', 'batvision_5ch_nolog', 'best_model.pth'),
+         dict(use_log=False)),                               # [L, R, ILD, cosIPD, sinIPD]
         ('current (my model)', train,
          os.path.join(ROOT, 'checkpoints', 'raydpt_5chflip', 'best_model.pth'),
-         dict()),                                          # RayDPT, 5ch log on (adjust if cues change)
+         dict()),                           # RayDPT, 5ch log on (adjust if cues change)
     ]
 
 
@@ -173,7 +177,7 @@ def build_qualitative(n_scenes=7, out_path=None):
         ax[0][c].set_title(t, fontsize=10)
     for a in ax.ravel():
         a.set_xticks([]); a.set_yticks([])
-    fig.suptitle('Qualitative: GT vs predicted ERP radial depth (turbo, 0–%dm)' % int(MAX_DEPTH),
+    fig.suptitle('Qualitative: GT vs predicted ERP planar (cubemap) depth (turbo, 0–%dm)' % int(MAX_DEPTH),
                  fontsize=11)
     fig.tight_layout()
     fig.savefig(out_path, dpi=95, bbox_inches='tight')

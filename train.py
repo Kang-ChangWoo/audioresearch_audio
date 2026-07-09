@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 RayDPT: ray-conditioned multi-scale Dense-Prediction-Transformer decoder for
-binaural-audio -> ERP radial depth.
+binaural-audio -> ERP planar (cubemap) depth.
 
 Ported from `test_for_audio_implicit_full` (model_raydpt.py + train_fullmap.py)
 into the two-file autoresearch layout. This file holds the model, the composite
@@ -601,10 +601,6 @@ def train(cfg):
                   f'ABS_REL: {abs_rel:.4f} RMSE: {rmse:.4f} '
                   f'd1: {d1:.4f} d2: {mean_errors[3]:.4f} d3: {mean_errors[4]:.4f}')
 
-            if vis_data:
-                save_visualizations(vis_data, epoch, vis_dir, max_depth)
-                print(f'  Saved {len(vis_data)} visualizations')
-
             # HONEST-WEIGHTED composite for model selection. RMSE + d1 dominate (not directly optimised
             # -> trustworthy); ABS_REL is directly optimisable (gameable) AND varies most across runs, so
             # it is DE-WEIGHTED (2026-July: effective per-unit coeff 0.75 -> 0.35). Lower is better.
@@ -618,6 +614,10 @@ def train(cfg):
                            os.path.join(ckpt_dir, 'best_model.pth'))
                 print(f'  >> Best model saved (score {best_score:.4f} | '
                       f'ABS_REL {abs_rel:.4f} RMSE {rmse:.4f} d1 {d1:.4f})')
+                # visualisations are dumped ONLY when the best checkpoint advances
+                if vis_data:
+                    save_visualizations(vis_data, epoch, vis_dir, max_depth)
+                    print(f'  Saved {len(vis_data)} visualizations')
 
         # Time budget check
         elapsed = time.time() - training_start

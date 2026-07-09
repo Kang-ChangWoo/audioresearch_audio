@@ -1,6 +1,9 @@
 """
 Data preparation and evaluation utilities for the RayDPT audio->ERP-depth model.
 
+Depth convention: PLANAR (cubemap perpendicular-Z), i.e. the SoundSpaces `erp_depth`
+maps are used as stored, with no along-ray (radial) rescaling.
+
 Ported from the `test_for_audio_implicit_full` repo (RayDPT pipeline) into the
 two-file autoresearch layout. This file is the FIXED data + evaluation harness:
 
@@ -52,24 +55,6 @@ def erp_grid(H, W):
     return el.astype(np.float32), az.astype(np.float32)
 
 
-def radial_factor(H, W):
-    """Per-pixel factor that converts cubemap perspective (perpendicular-Z) ERP
-    depth -> radial (along-ray) depth: r = d / max(|dx|, |dy|, |dz|).
-
-    The SoundSpaces `erp_depth` maps store the per-face perpendicular distance
-    (stitched cubemap), so a flat wall back-projects as a circular arc unless
-    rescaled. Dividing by the dominant ray-direction axis recovers true radial
-    depth (verified: flat floor/ceiling, vertical walls). RayDPT trains on radial
-    depth (the source repo's `erp_depth_radial`), so we apply this on the fly.
-    """
-    el, az = erp_grid(H, W)
-    dx = np.cos(el) * np.cos(az)
-    dy = np.cos(el) * np.sin(az)
-    dz = np.sin(el)
-    linf = np.maximum.reduce([np.abs(dx), np.abs(dy), np.abs(dz)])
-    return (1.0 / np.clip(linf, 1e-6, None)).astype(np.float32)        # (H, W)
-
-
 # ============================================================
 # Scene splitting (deterministic; no scene_split.json required)
 # ============================================================
@@ -95,7 +80,7 @@ def get_scene_split(dataset_dir, split_ratio, seed=42):
 
 
 # ============================================================
-# Dataset: binaural audio -> ERP radial depth
+# Dataset: binaural audio -> ERP planar (cubemap) depth
 # ============================================================
 
 _C = 340.0                       # speed of sound [m/s]
@@ -145,7 +130,7 @@ class SoundSpacesDataset(Dataset):
     Each item is a dict:
         spec  : (in_ch, H, W)  binaural cue stack, canonical order filtered by the feat_* flags:
                 [logL/L, logR/R, ILD, cosIPD, sinIPD]  (see build_channel_names / _features)
-        depth : (1, H, W)      radial depth / max_depth in [0, 1]
+        depth : (1, H, W)      planar (cubemap) depth / max_depth in [0, 1]
         mask  : (1, H, W)      valid-depth mask in {0, 1}
         key   : "<scene>/<idx>"
     """
@@ -173,8 +158,6 @@ class SoundSpacesDataset(Dataset):
         self.in_ch = len(self.channel_names)
         self.win_m = float(getattr(d, 'audio_window_m', 0) or self.max_depth)
         self.cut = int(2.0 * self.win_m / _C * self.sr)
-        # cubemap perpendicular-Z -> radial depth conversion (see radial_factor)
-        self._radial = torch.from_numpy(radial_factor(self.H, self.W))[None]   # (1,H,W)
 
         scene_split = get_scene_split(self.root_dir, d.split_ratio, seed=d.split_seed)
         self.scenes = scene_split[split]
@@ -243,8 +226,7 @@ class SoundSpacesDataset(Dataset):
             f'{self.depth_type}_depth_{idx}.npy')).astype(np.float32))
         d[d < 0] = 0.0
         t = F.interpolate(torch.from_numpy(d)[None, None], (self.H, self.W),
-                          mode='nearest').squeeze(0)            # (1,H,W) perspective-Z
-        t = t * self._radial                                   # -> radial (along-ray) depth
+                          mode='nearest').squeeze(0)            # (1,H,W) planar cubemap depth
         t = t.clamp(max=self.max_depth)
         return t / self.max_depth, (t > 0).float()
 
