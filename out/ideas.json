@@ -295,7 +295,8 @@
       "evidence_required": "a SCORED run, not a benchmark. Speed was measured; accuracy must be paid for.",
       "next_action": "Answerable at last: E22 vs E20 isolates win32/ffn at matched lr. Until then the fast defaults remain unvalidated.",
       "e17_result": "E17 DIVERGED (best epoch 4 of 25; final val d1 0.0974). It is therefore NOT a test of whether win32=3 + ffn=2 cost accuracy -- it is a second instance of D11. Recorded as `discard`, not `keep`. The speedup (1.32x, measured) stands; its accuracy cost is unmeasured.",
-      "result": "PROVISIONALLY SUPPORTED, once the optimiser was fixed. The fast config (win32=3, ffn=2) at lr 3e-4 matches the champion within a tenth of sigma while running 1.21x faster on 10% fewer parameters. But E21 differs from E11 in BOTH the knobs and the lr, so E23 (win5/ffn4 @ 3e-4) is required before the knobs can be called free."
+      "result": "PROVISIONALLY SUPPORTED, once the optimiser was fixed. The fast config (win32=3, ffn=2) at lr 3e-4 matches the champion within a tenth of sigma while running 1.21x faster on 10% fewer parameters. But E21 differs from E11 in BOTH the knobs and the lr, so E23 (win5/ffn4 @ 3e-4) is required before the knobs can be called free.",
+      "attribution": "E22 (win5/ffn4 @ lr 6e-4) = 1.9125 fills the 2x2. At MATCHED lr the fast knobs cost +0.0051 (E22 -> E20), below sigma. At MATCHED architecture, dropping lr from 1.2e-3 to 6e-4 costs +0.0032 (E11 -> E22), also below sigma. Neither effect is individually measurable, and E21 (both changes, lr 3e-4) lands at 1.9099, +0.0007 from the champion. So the fast defaults are accuracy-neutral within noise while running 1.21x faster on 10% fewer parameters. E23 (win5/ffn4 @ 3e-4) completes the square."
     },
     {
       "id": "I17",
@@ -337,7 +338,8 @@
       "result": "CONFIRMED. At lr 6e-4 the fast config is perfectly stable: E20's mae never ROSE between epochs (max ratio 0.99, against E17's 1.46 and E18's 1.51 at lr 1.2e-3), and it converged -- best checkpoint epoch 23 of 26. The instability was the OPTIMISER. Neither the architecture nor the coarse-layout auxiliary caused it, and E18 proved the latter by removing it and diverging anyway.",
       "caveat": "E20's composite of 1.9176 is +0.0083 against E11's 1.9093 -- just over the sigma of 0.008 -- but E20 differs from E11 in TWO ways (the knobs AND the lr), so the gap cannot be attributed. E22 (E11's architecture at lr 6e-4) fills the 2x2.",
       "ladder": "Monotone, and it kills the linear scaling rule for this model. fast config @ 1.2e-3 DIVERGED (E17); @ 6e-4 stable, 1.9176 (E20); @ 3e-4 stable, 1.9099 (E21). 3e-4 is the ORIGINAL batch-16 lr -- so scaling lr with batch was never needed, and doing it put every run on the edge of divergence.",
-      "practical_result": "E21 matches the E11 champion (1.9093) to +0.0007 -- one tenth of sigma -- with 10% fewer parameters (5.29M vs 5.89M) and 118.8 vs 143.3 s/epoch, a 1.21x speedup. Its rmse is actually better (1.3231 vs 1.3276); d1 is identical (0.5706 vs 0.5710)."
+      "practical_result": "E21 matches the E11 champion (1.9093) to +0.0007 -- one tenth of sigma -- with 10% fewer parameters (5.29M vs 5.89M) and 118.8 vs 143.3 s/epoch, a 1.21x speedup. Its rmse is actually better (1.3231 vs 1.3276); d1 is identical (0.5706 vs 0.5710).",
+      "e22_confirms": "E22 is stable too (max mae jump 0.99). Across the whole 2x2 the ONLY diverging cell is lr 1.2e-3 with a changed architecture. The optimiser, not the architecture."
     },
     {
       "id": "I19",
