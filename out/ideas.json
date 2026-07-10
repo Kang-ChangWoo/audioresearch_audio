@@ -205,7 +205,7 @@
     },
     {
       "id": "I12",
-      "status": "backlog",
+      "status": "validated",
       "priority": "high",
       "origin": "the E9/E10 pair: adding capacity costs convergence, removing it costs ceiling",
       "target_bottleneck": "ray cross-attention costs 67% of forward because it runs over 8192 (and 2048) ray queries",
@@ -218,7 +218,8 @@
       "minimal_falsifiable_test": "bench (a) and (b) for s/epoch first, zero GPU cost beyond a two-minute benchmark; run only the variant that reaches ~25 epochs at 2 layers.",
       "budget_risk": "none for the bench.",
       "evidence_required": "a CONVERGED 2-layer RayDPT (best epoch not last), then read d1.",
-      "next_action": "bench the two cost levers, then run the one that converges. This is the experiment that finally makes D9 answerable."
+      "next_action": "bench the two cost levers, then run the one that converges. This is the experiment that finally makes D9 answerable.",
+      "result": "Confirmed: the cost of a cross layer is its KV set, not its FFN. ffn 4->2 saves 2 s/epoch; shrinking cr32's KV from e3 (2048 tokens) to e4 (512) takes 231.6 -> 145.4 s/epoch at IDENTICAL parameter count (5.89M). That bought the first converged 2-layer RayDPT (E11), which is what made D9 answerable at all."
     }
   ],
   "discrepancies": [
@@ -297,9 +298,10 @@
       "observation": "With BOTH models converged, RayDPT (E9, 1.9308) trails batvision (E3, 1.8567) by 0.0741 -- and 0.0691 of that gap is d1 alone (0.5631 vs 0.5949). RMSE is essentially tied (1.3195 vs 1.3088, contributing 0.0067).",
       "why_it_matters": "d1 is the ANGULAR metric: S0 established that the interaural cues (ILD, IPD), which encode azimuth, buy d1 while log1p compression buys rmse. So the ray-conditioned model -- whose entire premise is that depth should be decoded per ray DIRECTION -- is worse at direction than a plain encoder-decoder with a 1x2 bottleneck, while matching it on range. The mechanism is losing exactly where it claims to win.",
       "diagnostic_value": "This is the central question of the project, and it is now sharp and measurable. Competing explanations, none yet tested: (a) capacity -- E9 has 5.00M params against batvision's 54.41M; (b) the decode cut -- E9 decodes at 32x64 and upsamples 8x, though I2's oracle says the 32x64 ceiling (d1 0.9578) is nowhere near the achieved 0.5631, so the ceiling is not binding; (c) the cross-attention cut to one layer; (d) ray-conditioning genuinely does not help angular assignment on this task.",
-      "next_action": "E10 restores ray_cross_layers=2 at decode 32 (fits the budget at 16.6 epochs/h). If d1 recovers materially, the cut was load-bearing and (c) explains it. If not, (a)/(b)/(d) remain, and a capacity-matched comparison is the next honest step.",
+      "next_action": "E12 (L1 x kv=e4) fills the 2x2 and assigns the +0.0079 to either the second cross layer or the coarse KV.",
       "e10_result": "E10 (ray_cross_layers restored to 2 at decode 32) moved d1 by only +0.0034 -- 12% of the 0.0284 remaining gap to batvision, below the noise floor. BUT E10 did NOT converge: 15 epochs at 232.3 s/epoch, best checkpoint = LAST epoch. Its d1 is a lower bound on a still-learning model, so S4's question is NOT answered: we cannot say the cross-layer cut was free.",
-      "what_e10_did_show": "With 2 layers, 15 unconverged epochs already beat 21 converged epochs at 1 layer (composite 1.9192 vs 1.9308, above sigma). Capacity helps per epoch; the budget takes it back."
+      "what_e10_did_show": "With 2 layers, 15 unconverged epochs already beat 21 converged epochs at 1 layer (composite 1.9192 vs 1.9308, above sigma). Capacity helps per epoch; the budget takes it back.",
+      "e11_result": "PARTIAL. The first CONVERGED 2-layer RayDPT (E11: 2 layers + coarse KV, 23 epochs, best at 22) recovers d1 +0.0079, closing 25% of the 0.0318 gap to batvision. So the angular deficit is PARTLY a budget artefact (H2) and PARTLY not: 0.0239 survives on a converged model. H1 (ray-conditioning does not aid angular assignment here) still stands for the remaining 75%."
     },
     {
       "id": "D10",

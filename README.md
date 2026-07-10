@@ -30,7 +30,6 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 | `I5` | ray conditioning / encoder-decoder correspondence | mid | RayDPT's DPT skip connections impose a FALSE spatial correspondence between the spectrogram's axes and the ERP's axes | inconclusive | none. Do not spend GPU on the skip ablation on this rationale. Revive only with an indepen |
 | `I7` | sensing physics / angular resolution | far | two microphones may fundamentally under-determine high azimuthal frequencies | candidate | Do not chase high-frequency power as a goal. Re-test the observability claim once RayDPT c |
 | `I10` | acoustic-representation / interpolation | mid | the nearest-neighbour resize in _features() turns the time axis into a coarse staircase | inconclusive | deferred confirm: run `--feat-interp bilinear --stft-hop 40` after the RayDPT throughput s |
-| `I12` | ray conditioning / attention cost | near | ray cross-attention costs 67% of forward because it runs over 8192 (and 2048) ray queries | backlog | bench the two cost levers, then run the one that converges. This is the experiment that fi |
 
 ### Open discrepancies
 
@@ -49,6 +48,7 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 
 | When | Mode | Event | Note |
 |---|---|---|---|
+| 2026-07-10T13:11 | `verify` | experiment_completed | First CONVERGED 2-layer RayDPT: composite 1.9093 (best RayDPT), d1 0.5710, 23 epochs, best at ep22. d1 recovers +0.0079 over E9, c |
 | 2026-07-10T12:09 | `verify` | discrepancy_recorded | D10 (methodological): small-sample diagnostics REVERSE their sign. 60 samples said RayDPT's d1 beat batvision's; the full 3543 say |
 | 2026-07-10T12:03 | `synthesize` | divergence_checkpoint | DC1 after S0-S4. Seven competing hypotheses across six causal families (mechanism, budget, capacity, sensing physics, encoder-deco |
 | 2026-07-10T12:01 | `synthesize` | experiment_completed | cross-layers restored to 2 at decode 32: composite 1.9192 (beats converged E9's 1.9308), but 15 epochs and best = LAST epoch -- di |
@@ -56,7 +56,6 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 | 2026-07-10T10:55 | `verify` | discrepancy_recorded | D9: the ray-conditioned model loses to a plain U-Net almost entirely on d1 (angle), while tying on rmse (range). It is losing exac |
 | 2026-07-10T10:55 | `verify` | experiment_completed | CONVERGED RayDPT: composite 1.9308, 21 epochs, best at ep18/21. Beats starved E4 (2.0471) by 0.1162 = 14 sigma. D5 confirmed: RayD |
 | 2026-07-10T09:51 | `exploit` | direction_changed | Pure speed exhausted at 1.4x (500 s/epoch, 7.2 epochs). Reaching 25 epochs needs a CAPACITY cut, recorded as such: decode_scale 32 |
-| 2026-07-10T09:42 | `exploit` | experiment_completed | I10 discriminator (bilinear at hop160, information identical to E2): rmse -0.0119 (52% of E5's gain, predicted direction) but d1 - |
 
 *Updated by `python utils/report.py research`. Champion: none yet.*
 <!-- RESEARCH:END -->
@@ -101,6 +100,7 @@ running best highlighted):
 | 9 | `7fae910` | 0.4470 | 1.3088 | 0.5900 | 1.8658 | keep | E8 batvision 5ch nolog win400 hop160 BILINEAR resize (I10: staircase discriminator) |
 | 10 | `bb9692d` | 0.4468 | 1.3195 | 0.5631 | 1.9309 | keep | E9 RayDPT decode32 xlayers1 batch64 lr1.2e-3 bf16 ep25 (S3: does a CONVERGED RayDPT beat a starved one?) |
 | 11 | `bc415a2` | 0.4187 | 1.3284 | 0.5665 | 1.9192 | keep | E10 RayDPT decode32 xlayers2 batch64 (S4: was the cross-layer cut load-bearing?) |
+| 12 | `c147692` | 0.4199 | 1.3276 | 0.5710 | 1.9093 | keep | E11 RayDPT decode32 xlayers2 kv=e4 batch64 (S5/H2: first CONVERGED 2-layer RayDPT) |
 <!-- RESULTS:END -->
 
 ## Progression (composite, lower = better)
