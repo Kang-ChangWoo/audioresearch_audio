@@ -220,6 +220,23 @@
       "evidence_required": "a CONVERGED 2-layer RayDPT (best epoch not last), then read d1.",
       "next_action": "bench the two cost levers, then run the one that converges. This is the experiment that finally makes D9 answerable.",
       "result": "Confirmed: the cost of a cross layer is its KV set, not its FFN. ffn 4->2 saves 2 s/epoch; shrinking cr32's KV from e3 (2048 tokens) to e4 (512) takes 231.6 -> 145.4 s/epoch at IDENTICAL parameter count (5.89M). That bought the first converged 2-layer RayDPT (E11), which is what made D9 answerable at all."
+    },
+    {
+      "id": "I13",
+      "status": "probing",
+      "priority": "high",
+      "origin": "utils/diag_d1.py -- spatial decomposition of D9's deficit on the full val set",
+      "target_bottleneck": "far-field range compression: both models predict a GT 8.5 m surface at ~5 m",
+      "mechanism_family": "depth objective design",
+      "causal_distance": "mid",
+      "general_hypothesis": "A loss chooses what a model hedges toward. Masked MAE drives every pixel to the conditional MEDIAN of its posterior; where the far tail is a minority of the mass, the median sits short and the model systematically under-predicts distance. d1 is a RELATIVE threshold, so that short-fall is fatal to it while barely touching RMSE, which far pixels rarely dominate.",
+      "detailed_hypothesis": "MEASURED (full val): D9's deficit is NOT azimuthal -- flat across azimuth sectors (std 0.0056 on mean 0.0245), ZERO on the floor (el<-30), and exploding with GT depth: at 8-9 m batvision d1 0.4023 vs RayDPT 0.1751. Mean predicted depth at GT 8-9 m: batvision 5.74 m, RayDPT E11 4.97 m. Replacing the dense MAE with a RELATIVE term (|D-gt|/gt) or a symmetric LOG term (|log D - log gt|) charges the same price for a 25% error at 1 m and at 9 m, which is exactly what d1 measures.",
+      "expected_metric_effect": "d1 rises, driven by the 7-10 m deciles. RMSE gets slightly WORSE (it rewards hedging toward the mean). ABS_REL improves almost by construction and is therefore NOT evidence.",
+      "main_falsification_condition": "the 7-10 m deciles do not improve -> the compression was not caused by the loss, and I13 is dropped whatever the composite does.",
+      "minimal_falsifiable_test": "two arms on the RayDPT champion E11's exact architecture: --main-loss rel_mae and --main-loss log_mae. Re-run utils/diag_d1.py on the winner and read the far deciles.",
+      "budget_risk": "none. Identical architecture and cost.",
+      "evidence_required": "far-decile d1 improves AND overall d1 improves beyond sigma, with the RMSE cost accounted for.",
+      "next_action": "E13 (rel_mae) and E14 (log_mae) running."
     }
   ],
   "discrepancies": [
@@ -294,14 +311,16 @@
     },
     {
       "id": "D9",
-      "status": "open",
+      "status": "reframed",
       "observation": "With BOTH models converged, RayDPT (E9, 1.9308) trails batvision (E3, 1.8567) by 0.0741 -- and 0.0691 of that gap is d1 alone (0.5631 vs 0.5949). RMSE is essentially tied (1.3195 vs 1.3088, contributing 0.0067).",
       "why_it_matters": "d1 is the ANGULAR metric: S0 established that the interaural cues (ILD, IPD), which encode azimuth, buy d1 while log1p compression buys rmse. So the ray-conditioned model -- whose entire premise is that depth should be decoded per ray DIRECTION -- is worse at direction than a plain encoder-decoder with a 1x2 bottleneck, while matching it on range. The mechanism is losing exactly where it claims to win.",
       "diagnostic_value": "This is the central question of the project, and it is now sharp and measurable. Competing explanations, none yet tested: (a) capacity -- E9 has 5.00M params against batvision's 54.41M; (b) the decode cut -- E9 decodes at 32x64 and upsamples 8x, though I2's oracle says the 32x64 ceiling (d1 0.9578) is nowhere near the achieved 0.5631, so the ceiling is not binding; (c) the cross-attention cut to one layer; (d) ray-conditioning genuinely does not help angular assignment on this task.",
-      "next_action": "E12 (L1 x kv=e4) fills the 2x2 and assigns the +0.0079 to either the second cross layer or the coarse KV.",
+      "next_action": "E13/E14 test I13. If the far deciles recover, D9 was never about angles.",
       "e10_result": "E10 (ray_cross_layers restored to 2 at decode 32) moved d1 by only +0.0034 -- 12% of the 0.0284 remaining gap to batvision, below the noise floor. BUT E10 did NOT converge: 15 epochs at 232.3 s/epoch, best checkpoint = LAST epoch. Its d1 is a lower bound on a still-learning model, so S4's question is NOT answered: we cannot say the cross-layer cut was free.",
       "what_e10_did_show": "With 2 layers, 15 unconverged epochs already beat 21 converged epochs at 1 layer (composite 1.9192 vs 1.9308, above sigma). Capacity helps per epoch; the budget takes it back.",
-      "e11_result": "PARTIAL. The first CONVERGED 2-layer RayDPT (E11: 2 layers + coarse KV, 23 epochs, best at 22) recovers d1 +0.0079, closing 25% of the 0.0318 gap to batvision. So the angular deficit is PARTLY a budget artefact (H2) and PARTLY not: 0.0239 survives on a converged model. H1 (ray-conditioning does not aid angular assignment here) still stands for the remaining 75%."
+      "e11_result": "PARTIAL. The first CONVERGED 2-layer RayDPT (E11: 2 layers + coarse KV, 23 epochs, best at 22) recovers d1 +0.0079, closing 25% of the 0.0318 gap to batvision. So the angular deficit is PARTLY a budget artefact (H2) and PARTLY not: 0.0239 survives on a converged model. H1 (ray-conditioning does not aid angular assignment here) still stands for the remaining 75%.",
+      "diagnostic_result": "SPATIAL DECOMPOSITION (utils/diag_d1.py, full val, instrument verified against the training logs) OVERTURNS the framing. The deficit is NOT angular. By azimuth sector it is nearly flat (0.0180-0.0345, std 0.0056 about a mean of 0.0245). By elevation, the FLOOR shows a deficit of 0.0002 -- the two models are identical there. By GT depth it explodes: 0-1 m RayDPT is BETTER (-0.0219); at 7-8 m the deficit is 0.1559; at 8-9 m it is 0.2271 (batvision 0.4023 vs RayDPT 0.1751). Both models under-predict far depth badly (GT 8.5 m -> batvision 5.74 m, RayDPT 4.97 m); RayDPT simply compresses harder.",
+      "reframing": "d1 is a +-25% RELATIVE threshold, so it is dominated by the far field, where a 3.5 m shortfall is a 41% error. RMSE barely notices because far pixels are rare. So 'RayDPT loses on the ANGULAR metric' was a misreading of what d1 measures. H1 and H4 both assumed an azimuthal story and are mis-specified: the azimuth breakdown does not support either. The live hypothesis is I13 -- the dense MAE drives predictions to the conditional median and compresses the far tail."
     },
     {
       "id": "D10",
@@ -377,7 +396,8 @@
       "rationale": "H7 costs nothing and could dissolve D9 entirely: if a per-image affine rescale closes the d1 gap, RayDPT's problem is a global depth SCALE, not angles, and every angular hypothesis (H1, H5, H6) is misdirected. Run it before spending an hour. H2 is the necessary control -- no 2-layer RayDPT has ever converged, so D9's central claim rests on models that were still learning.",
       "H7_result": "REFUTED on the full val set. An ORACLE per-image scale (median GT/pred ratio) closes only 0.0037 of the 0.0318 d1 gap (0.0318 -> 0.0281). A per-image affine closes 0.0127 but degrades d1 for BOTH models (batvision 0.5949 -> 0.5382), so it is not a fair correction. A global depth-scale miscalibration does not explain D9: the deficit is genuinely angular. D9 survives its cheapest possible dissolution.",
       "H6_result": "REFUTED, zero GPU, by reading RayBank. The premise -- 'a ray query knows its direction but nothing about the ears' -- is false. prepare.py's frame is x=front, y=left(+)/right(-) EAR AXIS, z=up, and RayBank sets use_xyz=True, so every query already carries y, the ear-axis component of its own direction, plus a Fourier PE of it. The `use_mic_pe` flag appends exactly [y, -y] (verified: allclose to y and -y), which is linearly redundant. Query content does not explain the angular deficit.",
-      "status_after_h6_h7": "H6 and H7 both refuted at zero GPU cost. E11 shows D9 is 25% budget (H2, partly), 75% not. Surviving: H1 (mechanism), H3 (raw capacity 5.89M vs 54.41M), H4 (angular observability), H5 (DPT skips' false axis correspondence). H1 and H4 make OPPOSITE spatial predictions and are separated by utils/diag_d1.py, which costs one GPU minute after E12."
+      "status_after_h6_h7": "H6 and H7 both refuted at zero GPU cost. E11 shows D9 is 25% budget (H2, partly), 75% not. Surviving: H1 (mechanism), H3 (raw capacity 5.89M vs 54.41M), H4 (angular observability), H5 (DPT skips' false axis correspondence). H1 and H4 make OPPOSITE spatial predictions and are separated by utils/diag_d1.py, which costs one GPU minute after E12.",
+      "H1_H4_status": "BOTH MIS-SPECIFIED. Each assumed the d1 deficit is azimuthal; the full-val spatial decomposition shows it is not (flat across azimuth, zero on the floor, exploding with GT depth). H4's sharp prediction -- deficit concentrated in the front/back confusion cones -- is only weakly present (front 0.0345, back 0.0260, side 0.0180) and cannot carry a mean deficit of 0.0245 that exists everywhere. Superseded by I13."
     }
   ]
 }

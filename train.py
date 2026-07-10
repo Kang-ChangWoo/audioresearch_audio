@@ -124,6 +124,7 @@ def make_config(args):
             coarse_head_h=16,
             coarse_head_w=32,
             w_dense=1.0,
+            main_loss=args.main_loss,
             # auxiliary LOW-FREQUENCY regularisers. program.md: free to tune or zero.
             # At convergence these two carry ~58% of the total loss, so they are a
             # research knob, not a constant (see idea I6).
@@ -439,10 +440,36 @@ def masked_mae(D, gt, mask):
     return ((D - gt).abs() * mask).sum() / mask.sum().clamp(min=1e-6)
 
 
+# --- main dense term (idea I13) -------------------------------------------------------------
+# MEASURED: both models severely under-predict far depth. At GT 8-9 m batvision predicts 5.74 m
+# and RayDPT 4.97 m. d1 is a +-25% RELATIVE threshold, so a 8.5 m surface predicted at 5.0 m
+# fails it outright, while RMSE barely notices because far pixels are rare. That far-field
+# compression, not any angular effect, is where RayDPT's d1 deficit lives (utils/diag_d1.py).
+#
+# WHY the loss causes it: masked MAE on normalised depth drives each pixel to the CONDITIONAL
+# MEDIAN of its posterior, and far depths are a minority of the mass, so the median sits short.
+# A RELATIVE error is the loss aligned with d1: it charges the same price for a 25% error at
+# 1 m and at 9 m. `log_mae` is the symmetric version (|log D - log gt|), which penalises
+# over- and under-prediction by the same ratio.
+#
+# program.md warns that ABS_REL as a METRIC is gameable. That is why this study is judged on
+# d1 and RMSE, never on abs_rel.
+def masked_main(D, gt, mask, kind='mae', eps=1e-3):
+    if kind == 'mae':
+        return masked_mae(D, gt, mask)
+    if kind == 'rel_mae':                       # |D - gt| / gt   (charges relative error)
+        r = (D - gt).abs() / gt.clamp(min=eps)
+        return (r * mask).sum() / mask.sum().clamp(min=1e-6)
+    if kind == 'log_mae':                       # |log D - log gt| (symmetric in the ratio)
+        r = (torch.log(D.clamp(min=eps)) - torch.log(gt.clamp(min=eps))).abs()
+        return (r * mask).sum() / mask.sum().clamp(min=1e-6)
+    raise ValueError(kind)
+
+
 def composite_loss(out, gt, mask, mcfg):
-    """Band-limited objective: dense masked-MAE + coarse-layout + low-pass.
+    """Band-limited objective: dense main term + coarse-layout + low-pass.
     gt / out['D'] are normalised depth in [0,1]. Returns (loss, parts)."""
-    main = masked_mae(out["D"], gt, mask)
+    main = masked_main(out["D"], gt, mask, getattr(mcfg, "main_loss", "mae"))
     loss = mcfg.w_dense * main
     chh, chw = mcfg.coarse_head_h, mcfg.coarse_head_w
     # METRIC/LOSS FIX (2026-July validation reset): the coarse-layout and low-pass loss TARGETS are now
@@ -783,6 +810,9 @@ def parse_args():
     p.add_argument('--ray-cross-layers', type=int, default=2,
                    help='CrossBlocks per ray scale. 2 = original. Halving it halves the '
                         'audio<->ray cross-attention cost, the dominant term.')
+    p.add_argument('--main-loss', type=str, default='mae', choices=['mae', 'rel_mae', 'log_mae'],
+                   help="dense term. 'mae' drives to the conditional median and compresses far depth; "
+                        "'rel_mae'/'log_mae' charge relative error, aligning the loss with d1 (idea I13).")
     p.add_argument('--ffn-mult', type=int, default=4,
                    help='CrossBlock FFN expansion. Most per-token FLOPs live here (idea I12).')
     p.add_argument('--cross-kv32', type=str, default='e3', choices=['e3', 'e4'],

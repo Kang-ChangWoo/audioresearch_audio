@@ -7,19 +7,19 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 
 | | |
 |---|---|
-| **Mode** | `VERIFY` — clean reimplementation on the correct parent -> standalone run -> bounded HPO -> PASS / FAIL |
-| **Active study** | `S5` [verify] raydpt-capacity (*running*) |
-| **Research question** | D9 claims RayDPT's entire deficit against the reference is ANGULAR (d1), which would indict ray-conditioning at exactly the point it claims to win. But that claim rests on models that never finished l |
-| **Current action** | E11 raydpt_e11_d32L2_kve4: --decode-scale 32 --ray-cross-layers 2 --cross-kv32 e4 --batch-size 64 --lr 1.2e-3 --amp bf16 --epochs 24. |
+| **Mode** | `EXPLORE` — 1 structural run + 0-2 focused probes -> CANDIDATE / DROP / INCONCLUSIVE |
+| **Active study** | `S6` [new] depth-objective (*running*) |
+| **Research question** | A loss chooses what a model hedges toward. Masked MAE drives every pixel to the conditional median; where far depths are a minority of the mass, the median sits short and the model systematically unde |
+| **Current action** | E13 raydpt_e13_relmae, E14 raydpt_e14_logmae -- E11's architecture exactly, only the dense term changes. |
 | **Latest result** | *(no scored run in this study yet)* |
-| **Next decision** | Convergence first: best_epoch must not be the last, or the run answers nothing (as E10 did). Then read d1, NOT the composite -- D9 is an angular claim. Caveat to honour: kv=e4 is a mechanism change, s |
-| **Why this mode** | DC1 chose H7 (zero GPU) then H2. H7 is refuted -- the deficit is angular, not a scale error. H2 now needs the first converged 2-layer RayDPT. |
+| **Next decision** | Judge on d1 and RMSE. ABS_REL improves by construction and is NOT evidence (program.md). Falsification: the 7-10 m deciles do not improve -> drop I13 whatever the composite does. Re-run utils/diag_d1. |
+| **Why this mode** | The spatial diagnostic redirected the research: the deficit is far-field compression, a property of the OBJECTIVE, not of ray-conditioning. A causally different mechanism (relative/log dense loss) is  |
 
 ### Current hypothesis
 
-- **General** — D9 claims RayDPT's entire deficit against the reference is ANGULAR (d1), which would indict ray-conditioning at exactly the point it claims to win. But that claim rests on models that never finished learning: no 2-layer RayDPT has ever converged inside the budget. Before indicting the mechanism, read d1 on a converged 2-layer model.
-- **Detailed** — Benchmarking showed the cost of a cross layer is not its FFN (ffn 4->2 saves 2 s/epoch) but its KV set: cr32 attends 2048 e3 tokens. Shrinking that KV to e4's 512 coarse tokens is 4x cheaper at IDENTICAL parameter count (5.89M), giving a measured 145.8 s/epoch = 24.7 epochs. If d1 then recovers toward batvision's 0.5949, D9 was a budget artefact (H2). If d1 stays near 0.566 on a CONVERGED 2-layer model, the angular deficit belongs to ray-conditioning itself (H1).
-- **Implementation note** — E11 raydpt_e11_d32L2_kve4: --decode-scale 32 --ray-cross-layers 2 --cross-kv32 e4 --batch-size 64 --lr 1.2e-3 --amp bf16 --epochs 24.
+- **General** — A loss chooses what a model hedges toward. Masked MAE drives every pixel to the conditional median; where far depths are a minority of the mass, the median sits short and the model systematically under-predicts distance. d1 is a relative threshold, so that shortfall is fatal to it.
+- **Detailed** — Charge relative error instead: |D-gt|/gt, or the symmetric |log D - log gt|. Both price a 25% mistake identically at 1 m and 9 m, which is exactly what d1 measures. Expect d1 to rise, driven by the 7-10 m deciles, and RMSE to worsen slightly.
+- **Implementation note** — E13 raydpt_e13_relmae, E14 raydpt_e14_logmae -- E11's architecture exactly, only the dense term changes.
 
 ### Research portfolio
 
@@ -30,6 +30,7 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 | `I5` | ray conditioning / encoder-decoder correspondence | mid | RayDPT's DPT skip connections impose a FALSE spatial correspondence between the spectrogram's axes and the ERP's axes | inconclusive | none. Do not spend GPU on the skip ablation on this rationale. Revive only with an indepen |
 | `I7` | sensing physics / angular resolution | far | two microphones may fundamentally under-determine high azimuthal frequencies | candidate | Do not chase high-frequency power as a goal. Re-test the observability claim once RayDPT c |
 | `I10` | acoustic-representation / interpolation | mid | the nearest-neighbour resize in _features() turns the time axis into a coarse staircase | inconclusive | deferred confirm: run `--feat-interp bilinear --stft-hop 40` after the RayDPT throughput s |
+| `I13` | depth objective design | mid | far-field range compression: both models predict a GT 8.5 m surface at ~5 m | probing | E13 (rel_mae) and E14 (log_mae) running. |
 
 ### Open discrepancies
 
@@ -41,21 +42,19 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
   <br/>*Why it matters:* If temporal resolution set range accuracy, B should own RMSE. It does not; A does, and A did not change resolution at all. Meanwhile B, which also sacrifices frequency resolution (win 400 -> 64), buys ANGLE. That inverts the physical story: sharper transients seem to help azimuth cues (ILD/IPD are read across frequency and time), while range accuracy responds to something in the sampling/interpolation of the time axis.
 - **`D8`** — E6 holds 29.7% LESS high-frequency azimuthal power than E2 (0.0232 vs 0.0331) yet has a BETTER d1 (0.6005 vs 0.5938). Separately, removing 58% of the gradient (E7 vs E3) barely changed the spectrum or the composite.
   <br/>*Why it matters:* It breaks the assumption -- mine, unstated until now -- that d1 improves because predictions get sharper. d1 counts pixels within +-25% of truth, and a well-centred smooth field beats a mis-placed sharp one. So the low-pass character of these models may be largely IRRELEVANT to the metric, and 'restore high frequencies' is probably the wrong research goal.
-- **`D9`** — With BOTH models converged, RayDPT (E9, 1.9308) trails batvision (E3, 1.8567) by 0.0741 -- and 0.0691 of that gap is d1 alone (0.5631 vs 0.5949). RMSE is essentially tied (1.3195 vs 1.3088, contributing 0.0067).
-  <br/>*Why it matters:* d1 is the ANGULAR metric: S0 established that the interaural cues (ILD, IPD), which encode azimuth, buy d1 while log1p compression buys rmse. So the ray-conditioned model -- whose entire premise is that depth should be decoded per ray DIRECTION -- is worse at direction than a plain encoder-decoder with a 1x2 bottleneck, while matching it on range. The mechanism is losing exactly where it claims to win.
 
 ### Recent decisions
 
 | When | Mode | Event | Note |
 |---|---|---|---|
+| 2026-07-10T14:17 | `explore` | direction_changed | D9 REFRAMED by full-val spatial decomposition. The deficit is NOT angular: flat across azimuth (std 0.0056), ZERO on the floor, ex |
+| 2026-07-10T14:17 | `explore` | experiment_completed | 2x2 complete. Attribution: coarse KV +0.0033 d1, second cross layer +0.0046; additive, neither alone clears sigma. |
 | 2026-07-10T13:13 | `verify` | candidate_dropped | H6 REFUTED at zero GPU by reading RayBank: use_xyz=True already puts y -- the ear-axis component -- into every ray query, and use_ |
 | 2026-07-10T13:11 | `verify` | experiment_completed | First CONVERGED 2-layer RayDPT: composite 1.9093 (best RayDPT), d1 0.5710, 23 epochs, best at ep22. d1 recovers +0.0079 over E9, c |
 | 2026-07-10T12:09 | `verify` | discrepancy_recorded | D10 (methodological): small-sample diagnostics REVERSE their sign. 60 samples said RayDPT's d1 beat batvision's; the full 3543 say |
 | 2026-07-10T12:03 | `synthesize` | divergence_checkpoint | DC1 after S0-S4. Seven competing hypotheses across six causal families (mechanism, budget, capacity, sensing physics, encoder-deco |
 | 2026-07-10T12:01 | `synthesize` | experiment_completed | cross-layers restored to 2 at decode 32: composite 1.9192 (beats converged E9's 1.9308), but 15 epochs and best = LAST epoch -- di |
 | 2026-07-10T10:58 | `verify` | candidate_dropped | REFUTED, zero GPU: the model WITHOUT the 1x2 waist (RayDPT E9) is SMOOTHER than the one with it (batvision E3) -- 0.0179 vs 0.0290 |
-| 2026-07-10T10:55 | `verify` | discrepancy_recorded | D9: the ray-conditioned model loses to a plain U-Net almost entirely on d1 (angle), while tying on rmse (range). It is losing exac |
-| 2026-07-10T10:55 | `verify` | experiment_completed | CONVERGED RayDPT: composite 1.9308, 21 epochs, best at ep18/21. Beats starved E4 (2.0471) by 0.1162 = 14 sigma. D5 confirmed: RayD |
 
 *Updated by `python utils/report.py research`. Champion: none yet.*
 <!-- RESEARCH:END -->
@@ -101,6 +100,7 @@ running best highlighted):
 | 10 | `bb9692d` | 0.4468 | 1.3195 | 0.5631 | 1.9309 | keep | E9 RayDPT decode32 xlayers1 batch64 lr1.2e-3 bf16 ep25 (S3: does a CONVERGED RayDPT beat a starved one?) |
 | 11 | `bc415a2` | 0.4187 | 1.3284 | 0.5665 | 1.9192 | keep | E10 RayDPT decode32 xlayers2 batch64 (S4: was the cross-layer cut load-bearing?) |
 | 12 | `c147692` | 0.4199 | 1.3276 | 0.5710 | 1.9093 | keep | E11 RayDPT decode32 xlayers2 kv=e4 batch64 (S5/H2: first CONVERGED 2-layer RayDPT) |
+| 13 | `1b995ab` | 0.4125 | 1.3409 | 0.5664 | 1.9250 | keep | E12 RayDPT decode32 xlayers1 kv=e4 (S5 attribution: 2x2 missing cell) |
 <!-- RESULTS:END -->
 
 ## Progression (composite, lower = better)
