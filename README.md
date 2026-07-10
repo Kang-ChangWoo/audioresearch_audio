@@ -31,7 +31,7 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 | `I7` | sensing physics / angular resolution | far | two microphones may fundamentally under-determine high azimuthal frequencies | candidate | Do not chase high-frequency power as a goal. Re-test the observability claim once RayDPT c |
 | `I10` | acoustic-representation / interpolation | mid | the nearest-neighbour resize in _features() turns the time axis into a coarse staircase | inconclusive | deferred confirm: run `--feat-interp bilinear --stft-hop 40` after the RayDPT throughput s |
 | `I14` | ray conditioning / audio token routing | mid | far-field rays cannot see the late, weak echo that carries distance | probing | E16 (control) then E15b (treatment), both at lr 6e-4. Pre-registered falsification unchang |
-| `I19` | ray conditioning / physically-structured decoding | far | the model must LEARN that echo delay encodes depth, and it fails to, collapsing far surfaces toward the median | candidate | E25 (champion config + depth volume, control E23 = 1.8962) and E26 (confirm draw). |
+| `I19` | ray conditioning / physically-structured decoding | far | the model must LEARN that echo delay encodes depth, and it fails to, collapsing far surfaces toward the median | verifying | E27 / E28 (champion + EDE, --epochs 21). Until they land, I19's effect on the champion par |
 
 ### Open discrepancies
 
@@ -43,19 +43,21 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
   <br/>*Why it matters:* If temporal resolution set range accuracy, B should own RMSE. It does not; A does, and A did not change resolution at all. Meanwhile B, which also sacrifices frequency resolution (win 400 -> 64), buys ANGLE. That inverts the physical story: sharper transients seem to help azimuth cues (ILD/IPD are read across frequency and time), while range accuracy responds to something in the sampling/interpolation of the time axis.
 - **`D8`** — E6 holds 29.7% LESS high-frequency azimuthal power than E2 (0.0232 vs 0.0331) yet has a BETTER d1 (0.6005 vs 0.5938). Separately, removing 58% of the gradient (E7 vs E3) barely changed the spectrum or the composite.
   <br/>*Why it matters:* It breaks the assumption -- mine, unstated until now -- that d1 improves because predictions get sharper. d1 counts pixels within +-25% of truth, and a well-centred smooth field beats a mis-placed sharp one. So the low-pass character of these models may be largely IRRELEVANT to the metric, and 'restore high frequencies' is probably the wrong research goal.
+- **`D12`** — EchoDelayVolume beat its control by 0.0112 on the fast parent (E24 vs E21) and LOST by 0.0121 on the champion parent (E25 vs E23). Same mechanism, opposite signs, both above sigma.
+  <br/>*Why it matters:* program.md flags exactly this -- a mechanism whose outcome depends on its parent. But before crediting the parent, look at the budget: EchoDelayVolume costs 12 s/epoch, and on the slower champion architecture that pushed E25 from 22 epochs to 21, cut its cosine schedule to 81%, and left its best checkpoint at the LAST epoch. E24 survived only because the fast knobs had bought it epochs (best 23 of 24). The apparent parent-dependence may be pure budget.
 
 ### Recent decisions
 
 | When | Mode | Event | Note |
 |---|---|---|---|
+| 2026-07-11T00:42 | `verify` | discrepancy_recorded | D12: the same mechanism beats its control on the fast parent (+0.0112) and loses on the champion parent (-0.0121), both above sigm |
+| 2026-07-11T00:42 | `verify` | experiment_completed | INCONCLUSIVE, not negative. Champion + EchoDelayVolume scored 1.9083 vs E23's 1.8962 -- opposite sign from E24 -- but it did NOT c |
 | 2026-07-10T23:38 | `verify` | experiment_completed | I19 PASSED its pre-registered falsification: every far decile improved (7-8m +0.0692, 8-9m +0.0759, 9-10m +0.0595) and the mean pr |
 | 2026-07-10T22:37 | `exploit` | experiment_completed | NEW RayDPT CHAMPION 1.8962 (win5/ffn4 @ lr 3e-4, 22 epochs, stable). Closing the 2x2 OVERTURNED the previous reading: lr 3e-4 gain |
 | 2026-07-10T21:33 | `exploit` | experiment_completed | Control win5/ffn4 @ lr 6e-4: composite 1.9125, stable. 2x2 complete except E23. At matched lr the fast knobs cost +0.0051 (below s |
 | 2026-07-10T20:48 | `exploit` | idea_added | STRUCTURAL, not a loss change. The encoder's width axis IS time, so e3's 64 columns are depth hypotheses (d = c*t/2, 0.08-9.92m).  |
 | 2026-07-10T20:33 | `exploit` | experiment_completed | fast config at lr 3e-4: composite 1.9099, stable (max mae jump 0.99), converged (best ep19/25). Matches the E11 champion (1.9093)  |
 | 2026-07-10T19:33 | `exploit` | experiment_completed | I18 CONFIRMED: at lr 6e-4 the fast config is stable (mae never rose between epochs, max ratio 0.99 vs 1.46/1.51 at lr 1.2e-3) and  |
-| 2026-07-10T18:30 | `exploit` | experiment_completed | DIVERGED at ep7 despite w_coarse_layout=0, never recovered (val d1 0.5342 -> 0.1307; lc pinned at 0.1849, D_coarse saturated to a  |
-| 2026-07-10T18:16 | `exploit` | candidate_dropped | PREMISE REFUTED BY ITS OWN EXPERIMENT. E18 removed lc from the loss entirely and the run still destabilised (mae x1.51 at epoch 7, |
 
 *Updated by `python utils/report.py research`. Champion: none yet.*
 <!-- RESEARCH:END -->
@@ -111,6 +113,7 @@ running best highlighted):
 | 20 | `7bf10af` | 0.4132 | 1.3357 | 0.5708 | 1.9125 | keep | E22 CONTROL win5 ffn4 @ lr 6e-4 (F1 attribution: knobs vs lr) |
 | 21 | `1c34d7c` | 0.4131 | 1.3295 | 0.5765 | 1.8962 | keep | E23 CONTROL win5 ffn4 @ lr 3e-4 (F1 attribution: closes the 2x2) |
 | 22 | `a7b0613` | 0.4203 | 1.3183 | 0.5733 | 1.8987 | keep | E24 EchoDelayVolume: per-ray soft-argmax over echo delay (G0/I19 structural) |
+| 23 | `0a858e4` | 0.4238 | 1.3307 | 0.5730 | 1.9083 | keep | E25 CHAMPION arch + EchoDelayVolume (G0/I19 on the correct parent) |
 <!-- RESULTS:END -->
 
 ## Progression (composite, lower = better)

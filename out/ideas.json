@@ -347,7 +347,7 @@
     },
     {
       "id": "I19",
-      "status": "candidate",
+      "status": "verifying",
       "priority": "high",
       "origin": "the measured far-field failure (D9 reframed) + the physical meaning of the encoder's width axis",
       "target_bottleneck": "the model must LEARN that echo delay encodes depth, and it fails to, collapsing far surfaces toward the median",
@@ -361,10 +361,12 @@
       "minimal_falsifiable_test": "E24: the current defaults + --depth-volume True. E21 (1.9099) is the control -- the defaults ARE its config, so the run differs in one thing.",
       "budget_risk": "low; +34k params, benchmarked before the run.",
       "evidence_required": "far-decile d1 improves AND overall d1 clears sigma.",
-      "next_action": "E25 (champion config + depth volume, control E23 = 1.8962) and E26 (confirm draw).",
+      "next_action": "E27 / E28 (champion + EDE, --epochs 21). Until they land, I19's effect on the champion parent is UNKNOWN, not negative.",
       "result": "PASSED its pre-registered falsification -- the same test that killed I13. Against the matched control E21, EVERY far decile improved: 7-8 m +0.0692, 8-9 m +0.0759, 9-10 m +0.0595 (and 6-7 m +0.0434). The mean predicted depth at GT 8-9 m rose 4.758 m -> 5.238 m (batvision 5.738 m), so the range compression the mechanism was designed to attack actually loosened. Overall d1 +0.0027, rmse -0.0048, composite 1.9099 -> 1.8987 (-0.0112, above sigma). Stable (max mae jump 0.99), converged (best epoch 23 of 24). Costs 12 s/epoch and LESS VRAM (11.8 vs 13.8 GB).",
       "significance": "This is the first mechanism in the project whose PRE-REGISTERED prediction was confirmed. I1's metric prediction inverted, I2/I4/I6/I11 were refuted, I13 was killed by this same far-decile test, I17 was refuted by its own experiment. Confirmation here means the physical story -- an echo from depth d arrives at t=2d/c, and the encoder's width axis IS that delay -- is doing the work, not a lucky hyperparameter.",
-      "caveat": "E24 carried the fast knobs (win32=3, ffn=2), which E23 measured at +0.0137. The mechanism has never been run on the champion architecture, and it has ONE draw. program.md: never crown a candidate on a single draw."
+      "caveat": "E24 carried the fast knobs (win32=3, ffn=2), which E23 measured at +0.0137. The mechanism has never been run on the champion architecture, and it has ONE draw. program.md: never crown a candidate on a single draw.",
+      "e25_inconclusive": "E25 (champion architecture + EchoDelayVolume) scored 1.9083 against E23's 1.8962 -- the OPPOSITE sign from E24, which beat its control by 0.0112. But E25 did NOT converge: best checkpoint = LAST epoch (21/21). And it was triply disadvantaged, all in the same direction and none of it the mechanism: EchoDelayVolume costs 12 s/epoch, so on the champion architecture (157.1 vs 144.6) it fits one epoch fewer; --epochs 26 meant its cosine was cut off at 81% of schedule (E23 reached 92%); and its best checkpoint is the last. This is the E10 trap again -- reading a metric off a model that was still learning.",
+      "correction": "Re-run with --epochs matched to what fits (21), so cosine anneals to zero inside the budget (idea I3). Two draws: E27 and E28."
     }
   ],
   "discrepancies": [
@@ -474,6 +476,14 @@
       "root_cause": "coarse_head is Conv2d(dim,1,1) + sigmoid sitting directly on m16 = F16 + se4(e4), with no normalisation. F16 is a residual accumulation over CrossBlocks whose magnitude grows with the KV set and the FFN width. Once the sigmoid saturates its gradient is ~0 and lc cannot recover.",
       "root_cause_CORRECTED": "MY ORIGINAL ATTRIBUTION WAS WRONG. I blamed coarse_head because lc spiked hardest. But E18 sets w_coarse_layout=0, so lc contributes NO gradient at all -- and the run still destabilised, at epoch 7, with mae jumping x1.51 (0.0632 -> 0.0953) and `low` x1.52 alongside it. lc is a MEASURING INSTRUMENT reading m16 through a sigmoid, not the cause: when the trunk moves, the sigmoid amplifies it. Deleting the auxiliary delayed the spike from epoch 5 to epoch 7 and did not prevent it.",
       "revised_root_cause": "The instability is in the TRUNK, and the only remaining candidate is the optimiser: lr 1.2e-3, obtained by the linear scaling rule from 3e-4 at batch 16. E9/E11/E12 survived it; the two configurations with LESS capacity per layer (win32=3, ffn=2) and the one with a larger KV set (kv16=e3) did not. Gradient clipping is already at 1.0 and does not prevent it."
+    },
+    {
+      "id": "D12",
+      "status": "open",
+      "observation": "EchoDelayVolume beat its control by 0.0112 on the fast parent (E24 vs E21) and LOST by 0.0121 on the champion parent (E25 vs E23). Same mechanism, opposite signs, both above sigma.",
+      "why_it_matters": "program.md flags exactly this -- a mechanism whose outcome depends on its parent. But before crediting the parent, look at the budget: EchoDelayVolume costs 12 s/epoch, and on the slower champion architecture that pushed E25 from 22 epochs to 21, cut its cosine schedule to 81%, and left its best checkpoint at the LAST epoch. E24 survived only because the fast knobs had bought it epochs (best 23 of 24). The apparent parent-dependence may be pure budget.",
+      "diagnostic_value": "If E27 (same config, --epochs 21 so cosine anneals) converges and beats E23, the parent-dependence dissolves and the mechanism is real. If it converges and still loses, the mechanism genuinely needs the capacity the fast knobs removed -- which would itself be a finding about what the ray pathway spends its capacity on.",
+      "next_action": "E27 and E28, champion + EDE at --epochs 21."
     }
   ],
   "divergence_checkpoints": [
