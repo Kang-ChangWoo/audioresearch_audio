@@ -160,7 +160,7 @@
     },
     {
       "id": "I10",
-      "status": "probing",
+      "status": "inconclusive",
       "origin": "E5 improved although its temporal resolution was unchanged -- an unexplained result",
       "target_bottleneck": "the nearest-neighbour resize in _features() turns the time axis into a coarse staircase",
       "mechanism_family": "acoustic-representation / interpolation",
@@ -172,8 +172,11 @@
       "minimal_falsifiable_test": "run_base.py --use-log False --feat-interp bilinear (win 400, hop 160). One run. Control = E2.",
       "budget_risk": "none. Identical shapes, identical model, identical frame count.",
       "evidence_required": "RMSE gain comparable to E5's, with information held fixed.",
-      "next_action": "queued in utils/run_queue3.sh after the I6/I7 discriminator.",
-      "strengthened_by": "The composite is monotone in staircase block width across E2/E5/E6 (28.4px -> 7.2px -> 2.9px gives 1.8646 -> 1.8514 -> 1.8379), while the two runs' other properties (smear, frequency resolution) move incoherently. Staircase fineness is the only variable that tracks the score across all three."
+      "next_action": "deferred confirm: run `--feat-interp bilinear --stft-hop 40` after the RayDPT throughput study.",
+      "strengthened_by": "The composite is monotone in staircase block width across E2/E5/E6 (28.4px -> 7.2px -> 2.9px gives 1.8646 -> 1.8514 -> 1.8379), while the two runs' other properties (smear, frequency resolution) move incoherently. Staircase fineness is the only variable that tracks the score across all three.",
+      "result": "E8 (win400 hop160 BILINEAR, information EXACTLY equal to control E2): rmse 1.3088 vs 1.3207 (-0.0119), d1 0.5900 vs 0.5938 (-0.0038), composite 1.8658 vs 1.8646 (+0.0012). Removing the staircase recovers 52% of E5's RMSE gain with zero extra information -- the predicted direction -- but it COSTS d1, and the two cancel: the composite does not move. On the composite scale each change is below sigma~0.008 (rmse contributes -0.0074, d1 contributes +0.0083).",
+      "verdict": "PARTIAL, NOT CROWNED. The nearest-neighbour staircase is a real contributor to RANGE error -- about half of what E5 gained -- so the resize in _features is a genuine (if small) defect. But it is not the whole story: E5's composite gain (-0.0132, above sigma) survives only with the extra time samples, and smoothing alone buys nothing. Per program.md a near-noise effect requires confirmation; no single run crowns this.",
+      "open_question": "Are smoothness and density COMPLEMENTARY? The clean test is bilinear + hop40 versus E5 (nearest + hop40). If the composite improves beyond E5's -0.0132, they add. Cheap, one run -- but it queues behind the RayDPT throughput work, which gates every RayDPT judgement."
     },
     {
       "id": "I11",
@@ -239,11 +242,12 @@
     },
     {
       "id": "D6",
-      "status": "open",
+      "status": "partially_resolved",
       "observation": "I1's CONTROL arm improved. E5 (win400 hop40) cut RMSE by 0.0227 and the composite by 0.0132 (above sigma) versus E2, despite leaving the analysis window -- and therefore the temporal smear of 1.417 m -- completely unchanged.",
       "why_it_matters": "The arm was designed to isolate 'sampling density' from 'resolution' and to show nothing. It showed something, and in RMSE, the very metric reserved as evidence FOR the resolution mechanism. A Nyquist check says hop=160 already samples the window's envelope at 1.2x Nyquist, so arm A added ~no information. Something other than information improved range accuracy.",
       "diagnostic_value": "Forces a third explanation: the nearest-neighbour resize (I10). If bilinear at hop=160 recovers the gain, then BOTH E5's reading and I1's original framing were wrong, and the real defect is an interpolation choice buried in _features -- editable research logic that nobody had questioned.",
-      "next_action": "I10 run, queued. Do not interpret arm B until I10 lands."
+      "next_action": "Confirm with bilinear+hop40. If that beats E5, smoothness and density are complementary and the residual is real.",
+      "resolution": "Half explained. Holding information fixed and removing only the staircase (E8) recovers 52% of E5's RMSE gain, so interpolation smoothness IS part of why the control arm moved. But it recovers none of E5's COMPOSITE gain, because the smoother input costs d1. So E5's composite win still requires the extra time samples, whose information content Nyquist says is ~nil. The residual mystery: 4x oversampling a band-limited envelope improves the composite by 0.0132 (above sigma) for reasons neither information nor interpolation fully explains. Candidate: optimisation/conditioning of the encoder input, not the representation's content."
     },
     {
       "id": "D7",

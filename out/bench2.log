@@ -1,1 +1,28 @@
 [evallock] waiting for the scored-evaluation lock; held by: pid=176036 exp=batvision_5ch_nolog_bilinear since=2026-07-10T08:38:47
+[evallock] still waiting (10 min)...
+[evallock] still waiting (20 min)...
+[evallock] still waiting (30 min)...
+[evallock] still waiting (40 min)...
+[evallock] still waiting (50 min)...
+[evallock] acquired (exp=bench_raydpt, pid=179207)
+  amp  batch   s/iter  peak GB   s/epoch  epochs in 1h
+--------------------------------------------------------
+  off     16    0.328    32.09     590.1           6.1  <- best so far
+  off     32    0.654    44.64     588.3           6.1  (over VRAM cap)
+  off     48      OOM
+ bf16     16    0.441    14.34     794.7           4.5
+ bf16     32    0.937    28.53     843.1           4.3
+ bf16     48    1.465    42.72     878.7           4.1
+  off     16  FAILED (ImportError: cannot import name 'get_num_sms' from 'torch._inductor.utils)
+  off     32  FAILED (ImportError: cannot import name 'get_num_sms' from 'torch._inductor.utils)
+  off     48  FAILED (ImportError: cannot import name 'get_num_sms' from 'torch._inductor.utils)
+ bf16     16  FAILED (ImportError: cannot import name 'get_num_sms' from 'torch._inductor.utils)
+ bf16     32  FAILED (ImportError: cannot import name 'get_num_sms' from 'torch._inductor.utils)
+ bf16     48  FAILED (ImportError: cannot import name 'get_num_sms' from 'torch._inductor.utils)
+[evallock] released
+--------------------------------------------------------
+
+chosen: batch=16 amp=off compile=False  ->  590.1 s/epoch, ~6.1 epochs in the 1h budget
+peak 32.09 GB
+!! still short of the 25-epoch target (6.1). More work needed on I8.
+wrote out/raydpt_batch.txt
