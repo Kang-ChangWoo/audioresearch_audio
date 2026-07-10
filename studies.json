@@ -4,7 +4,7 @@
   "reset_note": "Fresh from original baseline f677b0f + mask-weighted coarse/low loss targets + composite abs_rel weight 0.75->0.35 + PLANAR (cubemap) depth target.",
   "depth_convention": "planar (cubemap perpendicular-Z); stored erp_depth used as-is; radial_factor removed",
   "metric": "composite (selection) = rmse/1.6 + (1-d1)/0.46 + 0.35*abs_rel  (lower better; RMSE+d1 dominate; abs_rel de-weighted)",
-  "next_exp_id": "E10",
+  "next_exp_id": "E11",
   "global_champion": null,
   "concluded_studies": [
     {
@@ -108,26 +108,61 @@
         "RayDPT is COMPUTE-STARVED: 5 epochs vs batvision's 25 under the same wall-clock budget, best checkpoint = last epoch, all val metrics still improving. The 2.0471 vs 1.8567 gap measures budget, not architecture. 64x128 attention (lsa64 + cross64) is 57% of forward cost; F.unfold in _window_kv materialises 1.8GB at batch 16.",
         "68.7% of RayDPT's parameters (e5..e8, 16.78M of 24.44M) are dead: never used in forward, no gradients."
       ]
+    },
+    {
+      "study_id": "S3",
+      "lineage": "raydpt-throughput",
+      "parent": "E4 (raydpt_e4_planar)",
+      "type": "refine",
+      "status": "concluded",
+      "general_hypothesis": "Under a wall-clock budget, compute spent per step must be repaid in epochs. A model that cannot converge inside the budget is not being evaluated on its mechanism -- it is being penalised for its speed. Before RayDPT's ray-conditioning can be judged at all, RayDPT must be able to converge.",
+      "detailed_hypothesis": "E4 fitted 5 epochs at 713 s/epoch, best checkpoint = last epoch, all val metrics still improving. Profiling shows cross-attention is 67% of forward, and I2's oracle shows the 64x128 decode scale imposes a ceiling (composite 0.3527 even at 32x64) that the model, at 2.0471, is nowhere near. Cutting the decode scale to 32x64 and the cross-attention to one layer per scale gives a MEASURED 147.3 s/epoch = 24.4 epochs/h, while preserving ray-conditioning. A converged cheap ray model should beat an unconverged expensive one.",
+      "experiment_note": "E9 raydpt_e9_d32L1_b64: --decode-scale 32 --ray-cross-layers 1 --batch-size 64 --lr 1.2e-3 (linear scaling) --amp bf16 --epochs 25. COMPOUND change; attribute nothing to a single part.",
+      "hpo_stage": "structural-screen",
+      "hpo_runs_used": 0,
+      "runs": [
+        {
+          "exp_id": "E9",
+          "name": "raydpt_e9_d32L1_b64",
+          "abs_rel": 0.4468,
+          "rmse": 1.3195,
+          "d1": 0.5631,
+          "composite": 1.9308,
+          "best_epoch": 18,
+          "epochs_ran": 21,
+          "sec_per_epoch": 160.9,
+          "vram_gb": 20.1,
+          "params_m": 5.0,
+          "status": "keep"
+        }
+      ],
+      "decision_rule": "The question is convergence, not victory. Success = epochs_ran approaches 25 AND the best epoch is no longer the last, i.e. the run actually converges. If the composite also beats E4's 2.0471, D5 is confirmed and RayDPT was merely starved. If it converges but scores WORSE than E4, then the capacity we removed was load-bearing and the cut is the wrong one -- record that, do not patch it away. Ablate the compound change only after it is known to converge.",
+      "conclusion": "PASS (convergence achieved; D5 confirmed)",
+      "observations": [
+        "Converged: best epoch 18/21, val loss flat over the last 4 epochs. +0.1162 over the starved E4 = 14 sigma. D5 confirmed.",
+        "21 epochs, not the 24.4 the throughput bench predicted: the bench timed train steps only, and validation costs ~14 s/epoch. Benchmarks that omit validation overstate epochs-fit.",
+        "Still 0.0741 behind batvision, and 0.0691 of the gap is d1. RMSE is tied. See D9."
+      ]
     }
   ],
-  "mode": "exploit",
-  "mode_reason": "RayDPT's throughput gates every RayDPT judgement (D5); the operator asked for a run that reaches 25 epochs. Measured, not guessed.",
-  "studies_since_synthesize": 2,
+  "mode": "verify",
+  "mode_reason": "E9 established convergence but is a compound change. Before any claim about ray-conditioning, ablate the amputation: restore the cross-attention depth and see whether the d1 deficit (D9) is ours or the mechanism's.",
+  "studies_since_synthesize": 3,
   "portfolio": "out/ideas.json",
   "decision_log": "out/decision_log.jsonl",
   "active_study": {
-    "study_id": "S3",
-    "lineage": "raydpt-throughput",
-    "parent": "E4 (raydpt_e4_planar)",
+    "study_id": "S4",
+    "lineage": "raydpt-capacity",
+    "parent": "E9 (raydpt_e9_d32L1_b64)",
     "type": "refine",
     "status": "running",
-    "general_hypothesis": "Under a wall-clock budget, compute spent per step must be repaid in epochs. A model that cannot converge inside the budget is not being evaluated on its mechanism -- it is being penalised for its speed. Before RayDPT's ray-conditioning can be judged at all, RayDPT must be able to converge.",
-    "detailed_hypothesis": "E4 fitted 5 epochs at 713 s/epoch, best checkpoint = last epoch, all val metrics still improving. Profiling shows cross-attention is 67% of forward, and I2's oracle shows the 64x128 decode scale imposes a ceiling (composite 0.3527 even at 32x64) that the model, at 2.0471, is nowhere near. Cutting the decode scale to 32x64 and the cross-attention to one layer per scale gives a MEASURED 147.3 s/epoch = 24.4 epochs/h, while preserving ray-conditioning. A converged cheap ray model should beat an unconverged expensive one.",
-    "experiment_note": "E9 raydpt_e9_d32L1_b64: --decode-scale 32 --ray-cross-layers 1 --batch-size 64 --lr 1.2e-3 (linear scaling) --amp bf16 --epochs 25. COMPOUND change; attribute nothing to a single part.",
+    "general_hypothesis": "E9 is a COMPOUND change, so its deficit against the reference cannot be attributed. Before asking whether ray-conditioning helps, we must know which part of the capacity we removed was load-bearing -- otherwise we would be judging a mechanism by an amputation we chose ourselves.",
+    "detailed_hypothesis": "E9 cut both the decode scale (64->32) and the cross-attention depth (2->1 layers per ray scale). The audio<->ray cross-attention is where per-ray direction information enters the model, so halving it is the change most likely to have cost the d1 (angular) deficit seen in D9. Restoring ray_cross_layers=2 at decode 32 still fits the budget (measured 216.5 s/epoch = 16.6 epochs/h).",
+    "experiment_note": "E10 raydpt_e10_d32L2_b64: --decode-scale 32 --ray-cross-layers 2 --batch-size 64 --lr 1.2e-3 --amp bf16 --epochs 16.",
     "hpo_stage": "structural-screen",
     "hpo_runs_used": 0,
     "runs": [],
-    "decision_rule": "The question is convergence, not victory. Success = epochs_ran approaches 25 AND the best epoch is no longer the last, i.e. the run actually converges. If the composite also beats E4's 2.0471, D5 is confirmed and RayDPT was merely starved. If it converges but scores WORSE than E4, then the capacity we removed was load-bearing and the cut is the wrong one -- record that, do not patch it away. Ablate the compound change only after it is known to converge."
+    "decision_rule": "Judge on d1 first, not the composite: D9 says the gap is angular. If d1 recovers materially toward 0.5949, the cross-layer cut was load-bearing. If d1 does not move, the cut was free and the deficit lies in the decode scale, in raw capacity, or in ray-conditioning itself. Report epochs_ran; fewer epochs fit at 2 layers, which is itself a confound (D2/D5)."
   },
   "backlog": [
     {

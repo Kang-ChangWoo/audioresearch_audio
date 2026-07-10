@@ -72,9 +72,11 @@ def _model_registry():
         ('batvision (5ch, nolog)', run_base,
          os.path.join(ROOT, 'checkpoints', 'batvision_5ch_nolog', 'best_model.pth'),
          dict(use_log=False)),                               # [L, R, ILD, cosIPD, sinIPD]
+        # "my model" = the RayDPT lineage champion. Its ARCHITECTURE flags must match the
+        # checkpoint, or load_state_dict finds missing keys and the tile renders "pending".
         ('current (my model)', train,
-         os.path.join(ROOT, 'checkpoints', 'raydpt_e4_planar', 'best_model.pth'),
-         dict()),                           # RayDPT, 5ch log on (adjust if cues change)
+         os.path.join(ROOT, 'checkpoints', 'raydpt_e9_d32L1_b64', 'best_model.pth'),
+         dict(decode_scale=32, ray_cross_layers=1)),   # E9: 5ch log, 32x64 decode, 1 cross layer
     ]
 
 

@@ -124,7 +124,7 @@
     },
     {
       "id": "I8",
-      "status": "candidate",
+      "status": "validated",
       "priority": "high",
       "origin": "E4, the first RayDPT run under the planar target",
       "target_bottleneck": "RayDPT is COMPUTE-STARVED under the fixed 1-hour wall-clock budget",
@@ -137,13 +137,14 @@
       "minimal_falsifiable_test": "bf16 autocast alone (smallest diff, no architecture change), measuring s/epoch, epochs_ran and the composite. A pure speed change that leaves the mechanism identical is the cleanest test of the starvation hypothesis.",
       "budget_risk": "none -- this idea IS about the budget.",
       "evidence_required": "epochs_ran increases materially AND the best epoch stops being the last one (i.e. the run actually converges).",
-      "next_action": "E9 (raydpt_e9_d32L1_b64) is running: a COMPOUND change answering exactly one question -- does a RayDPT that CONVERGES beat one that does not (D5)? Nothing may be attributed to any single component; ablations follow if it wins.",
+      "next_action": "ablate the compound change: E10 restores ray_cross_layers=2 at decode 32 (16.6 epochs/h fits the budget).",
       "implementation": "Three non-mechanism changes: (1) I9 dead-tail deletion, output bit-identical. (2) LocalSphericalAttention now gathers neighbours by SLICING a once-padded tensor instead of F.unfold, which materialised (B, C*win*win, H*W) = 1.8 GB for k and v at 64x128 batch 16; verified mathematically identical in forward (rel 1e-7) and backward (input-grad 7e-7). (3) bf16 autocast + TF32 + cudnn.benchmark; metrics are still computed in fp32 so the METRIC never depends on compute precision. Determinism is traded for speed by default (--deterministic True restores it); run-to-run variance is already inside sigma~0.008.",
       "experiment_split": "Split into TWO experiments so throughput and batch size do not confound. E7 = pure speed at E4's exact optimisation (batch 16, lr 3e-4, --epochs 25): isolates 'is RayDPT merely compute-starved?'. E8 = batch tune with the linear lr scaling rule, using the batch that bench_raydpt.py MEASURES as fastest. A bigger batch means fewer optimizer steps per epoch (16->64 is 1800->450), so at a fixed lr it would look like a regression for reasons unrelated to throughput -- a tuning error, not evidence against I8.",
       "measured_profile": "GPU profile, batch 16 bf16, forward: cr64 35.2%, cr32 29.0%, lsa64 15.3%, lsa32 8.1%, refine64 3.7%, enc 3.4%. Cross-attention is 67% of forward. Full train step 278.6 ms = 501 s/epoch; 25 epochs needs 80 ms/step.",
       "pure_speed_exhausted": "bf16 + TF32 + cudnn.benchmark + the ORIGINAL unfold attention gives ~1.4x (713 -> 500 s/epoch) = 7.2 epochs. Both of my LSA rewrites were SLOWER on the real device and were reverted; the CPU forward-time proxy that motivated them was wrong. torch.compile is unavailable here (triton ImportError). Pure speed cannot reach 25 epochs.",
       "capacity_change": "Reaching 25 epochs requires reducing compute, which is a CAPACITY change and is recorded as such. MEASURED: decode_scale 32 (drop cr64+lsa64+refine64) 500 -> 216.5 s/epoch; plus ray_cross_layers 1 -> 147.3 s/epoch at batch 64 = 24.4 epochs/h, 5.00M params, 20.1 GB peak. Ray-conditioning is preserved (per-ray RayBank queries x audio cross-attention, depth decoded per ray direction); only the decode RESOLUTION and the cross-attention DEPTH change.",
-      "justification": "I2's oracle licenses the decode cut: a PERFECT predictor at 32x64 scores composite 0.3527 while RayDPT sits at 2.0471. The 64-scale buys resolution the model cannot use, and under a wall-clock budget that compute must be repaid in epochs."
+      "justification": "I2's oracle licenses the decode cut: a PERFECT predictor at 32x64 scores composite 0.3527 while RayDPT sits at 2.0471. The 64-scale buys resolution the model cannot use, and under a wall-clock budget that compute must be repaid in epochs.",
+      "result": "CONFIRMED. E9 (decode 32, 1 cross layer, batch 64, bf16, 25 epochs) fitted 21 epochs at 160.9 s/epoch and CONVERGED: best checkpoint at epoch 18 of 21, val loss flat over the last four. Composite 1.9308 versus the starved E4's 2.0471 -- an improvement of 0.1162, about 14 sigma. RayDPT was compute-starved, exactly as D5 claimed. Note: 21 epochs, not the predicted 24.4, because the throughput bench timed only train steps; validation adds ~14 s/epoch. Bench underestimates."
     },
     {
       "id": "I9",
@@ -238,11 +239,12 @@
     },
     {
       "id": "D5",
-      "status": "open",
+      "status": "resolved",
       "observation": "E4 (RayDPT) fitted only 5 epochs in the 1-hour budget (713.5 s/epoch) versus batvision's 25 (~130 s/epoch). Its best checkpoint is the LAST epoch and all val metrics were still improving monotonically. Peak VRAM 16.2 GB vs 2.4 GB.",
       "why_it_matters": "E4's composite 2.0471 vs E3's 1.8567 CANNOT be read as 'RayDPT is the worse model'. One model converged and then overfit for 12 epochs; the other never reached convergence. Under a wall-clock budget, throughput is silently part of the score. Every RayDPT-vs-batvision statement in this phase must carry epochs_ran, and no RayDPT mechanism can be fairly judged until RayDPT can converge inside the budget.",
       "diagnostic_value": "Reframes the research: the first-order problem for RayDPT is not its ray conditioning, its decoder, or its representation -- it is throughput (I8). It also retro-explains why D2 (batvision's overfitting turn at epoch 13-14) and this are the same confound seen from opposite ends: batvision has budget to spare, RayDPT has none.",
-      "next_action": "I8: bf16 autocast as the minimal pure-speed change; re-measure s/epoch, epochs_ran, best_epoch. Also I9: delete the 16.78M dead encoder params."
+      "next_action": "I8: bf16 autocast as the minimal pure-speed change; re-measure s/epoch, epochs_ran, best_epoch. Also I9: delete the 16.78M dead encoder params.",
+      "resolution": "CONFIRMED by E9. A converged RayDPT beats a starved one by 0.1162 (14 sigma). E4's 2.0471 measured budget, not architecture. Every RayDPT number in this phase must carry epochs_ran and best_epoch."
     },
     {
       "id": "D6",
@@ -268,6 +270,14 @@
       "why_it_matters": "It breaks the assumption -- mine, unstated until now -- that d1 improves because predictions get sharper. d1 counts pixels within +-25% of truth, and a well-centred smooth field beats a mis-placed sharp one. So the low-pass character of these models may be largely IRRELEVANT to the metric, and 'restore high frequencies' is probably the wrong research goal.",
       "diagnostic_value": "Redirects the whole low-pass line of inquiry. The question is not 'why is the prediction blurry' but 'why is the smooth field mis-centred', i.e. what sets per-ray depth accuracy. It also warns that spectral diagnostics, though cheap, do not proxy the metric.",
       "next_action": "Stop optimising for spectral sharpness. Keep the spectrum as a MECHANISM probe (I11) rather than a goal."
+    },
+    {
+      "id": "D9",
+      "status": "open",
+      "observation": "With BOTH models converged, RayDPT (E9, 1.9308) trails batvision (E3, 1.8567) by 0.0741 -- and 0.0691 of that gap is d1 alone (0.5631 vs 0.5949). RMSE is essentially tied (1.3195 vs 1.3088, contributing 0.0067).",
+      "why_it_matters": "d1 is the ANGULAR metric: S0 established that the interaural cues (ILD, IPD), which encode azimuth, buy d1 while log1p compression buys rmse. So the ray-conditioned model -- whose entire premise is that depth should be decoded per ray DIRECTION -- is worse at direction than a plain encoder-decoder with a 1x2 bottleneck, while matching it on range. The mechanism is losing exactly where it claims to win.",
+      "diagnostic_value": "This is the central question of the project, and it is now sharp and measurable. Competing explanations, none yet tested: (a) capacity -- E9 has 5.00M params against batvision's 54.41M; (b) the decode cut -- E9 decodes at 32x64 and upsamples 8x, though I2's oracle says the 32x64 ceiling (d1 0.9578) is nowhere near the achieved 0.5631, so the ceiling is not binding; (c) the cross-attention cut to one layer; (d) ray-conditioning genuinely does not help angular assignment on this task.",
+      "next_action": "E10 restores ray_cross_layers=2 at decode 32 (fits the budget at 16.6 epochs/h). If d1 recovers materially, the cut was load-bearing and (c) explains it. If not, (a)/(b)/(d) remain, and a capacity-matched comparison is the next honest step."
     }
   ]
 }

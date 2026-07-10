@@ -27,21 +27,22 @@
     "raydpt-baseline": {
       "mechanism": "ray-conditioned DPT: per-ray RayBank queries x audio cross-attention, depth decoded per ray direction",
       "role": "my model; the architectural invariant of this project",
-      "status": "anchored (E4), COMPUTE-STARVED under the wall-clock budget",
+      "status": "anchored + converged (E9). Still trails the reference, and the deficit is d1, not rmse.",
       "champion": {
-        "exp_id": "E4",
-        "name": "raydpt_e4_planar",
-        "commit": "9dd3bce",
-        "abs_rel": 0.5081,
-        "rmse": 1.3987,
-        "d1": 0.5423,
-        "composite": 2.0471,
-        "best_epoch": 5,
-        "epochs_ran": 5,
-        "sec_per_epoch": 713.5,
-        "vram_gb": 16.2,
+        "exp_id": "E9",
+        "name": "raydpt_e9_d32L1_b64",
+        "commit": "bb9692d",
+        "abs_rel": 0.4468,
+        "rmse": 1.3195,
+        "d1": 0.5631,
+        "composite": 1.9308,
+        "best_epoch": 18,
+        "epochs_ran": 21,
+        "sec_per_epoch": 160.9,
+        "vram_gb": 20.1,
+        "params_m": 5.0,
         "provisional": true,
-        "note": "ANCHOR, not a verdict. Only 5 epochs fit the 1h budget (batvision fits 25); the best checkpoint is the LAST epoch and every val metric was still improving. Do NOT read the 2.0471-vs-1.8567 gap as an architectural result -- see D5."
+        "note": "CONVERGED (best epoch 18 of 21, val loss flat for the last 4). Beats the starved E4 by 0.1162 = 14 sigma, confirming D5. Still 0.0741 behind batvision E3, and 0.0691 of that gap is d1 alone. COMPOUND config (decode 32, 1 cross layer, batch 64, lr 1.2e-3, bf16, 25 epochs) -- attribute nothing to a single part."
       },
       "dead_parameters": "e5..e8 = 16.78M of 24.44M (68.7%): built by UNet8Encoder, never used in forward, receive no gradient. See I9."
     },
@@ -54,6 +55,15 @@
         "composite": 1.8379
       },
       "open_question": "Is the gain temporal resolution, sampling density, or the nearest-neighbour staircase? I10 decides."
+    },
+    "raydpt-throughput": {
+      "mechanism": "make the ray-conditioned model converge inside the wall-clock budget by cutting decode resolution and cross-attention depth",
+      "role": "enabling lineage: nothing about RayDPT's mechanism could be judged before this",
+      "status": "validated (D5 confirmed)",
+      "champion": {
+        "exp_id": "E9",
+        "composite": 1.9308
+      }
     }
   },
   "specialists": [],
