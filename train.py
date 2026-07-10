@@ -119,6 +119,7 @@ def make_config(args):
             ffn_mult=args.ffn_mult,
             cross_kv32=args.cross_kv32,
             cross_kv16=args.cross_kv16,
+            coarse_norm=args.coarse_norm,
             # ray-feature bank flags
             use_xyz=True,
             use_fourier_pe=True,
@@ -377,6 +378,12 @@ class RayDPT(nn.Module):
         self.refine32 = Refine(dim); self.refine64 = Refine(dim)
         self.lsa32 = LocalSphericalAttention(dim, heads, 32, 64, getattr(cfg, "raydpt_win32", 5))
         self.lsa64 = LocalSphericalAttention(dim, heads, 64, 128, getattr(cfg, "raydpt_win64", 3))
+        # coarse_head sits on m16 = F16 + se4(e4). F16 is a residual accumulation over CrossBlocks,
+        # so its magnitude grows with the KV set size and the FFN width. Without normalisation the
+        # sigmoid saturates and its gradient dies -- the sole cause of E15's and E17's divergence
+        # (D11). `--coarse-norm True` inserts a GroupNorm so the head is insensitive to F16's scale.
+        self.coarse_norm = (nn.GroupNorm(1, dim) if bool(getattr(cfg, "coarse_norm", False))
+                            else nn.Identity())
         self.coarse_head = nn.Conv2d(dim, 1, 1)
         self.head = nn.Sequential(conv_bn(dim, ngf), conv_bn(ngf, ngf), nn.Conv2d(ngf, 1, 3, 1, 1))
         self.lite = getattr(cfg, "raydpt_lite", False)        # 2-scale (32,64) lite variant
@@ -411,7 +418,7 @@ class RayDPT(nn.Module):
             # skips + local spherical attn. Isolates the DPT-fusion / ray-grid gain.
             F32 = self._cross(self.rp32, self.rf32, self.cr32, kv4, B, 32, 64)
             m = F32 + self.se3(e3)                              # 32x64
-            d_c = torch.sigmoid(self.coarse_head(F.adaptive_avg_pool2d(m, (16, 32))))
+            d_c = torch.sigmoid(self.coarse_head(self.coarse_norm(F.adaptive_avg_pool2d(m, (16, 32)))))
             x = self.lsa32(self.refine32(m))                    # 32x64
             x = self.lsa64(self.refine64(self.up(x) + self.se2(e2)))   # 64x128
         else:
@@ -423,7 +430,7 @@ class RayDPT(nn.Module):
             F16 = self._cross(self.rp16, self.rf16, self.cr16, kv16, B, 16, 32)
             F32 = self._cross(self.rp32, self.rf32, self.cr32, kv32, B, 32, 64)
             m16 = F16 + self.se4(e4)                             # 16x32
-            d_c = torch.sigmoid(self.coarse_head(m16))          # (B,1,16,32) coarse layout
+            d_c = torch.sigmoid(self.coarse_head(self.coarse_norm(m16)))   # (B,1,16,32) coarse layout
             x = self.lsa32(self.refine32(self.up(m16) + F32 + self.se3(e3)))   # 32x64
             if self.decode_scale == 64:
                 F64 = self._cross(self.rp64, self.rf64, self.cr64, kv4, B, 64, 128)
@@ -834,6 +841,9 @@ def parse_args():
                    help='CrossBlocks per ray scale. 2 = original. Halving it halves the '
                         'audio<->ray cross-attention cost, the dominant term.')
     # --- architecture knobs the GPU profiler showed dominate (see README "fast baseline") ---
+    p.add_argument('--coarse-norm', type=lambda s: s == 'True', default=False,
+                   help='GroupNorm before coarse_head. Decouples the auxiliary sigmoid from F16\'s '
+                        'magnitude, which is what saturated in E15/E17 (D11, idea I15).')
     p.add_argument('--dim', type=int, default=192, help='ray/token width')
     p.add_argument('--n-heads', type=int, default=4)
     p.add_argument('--raydpt-win32', type=int, default=3,
