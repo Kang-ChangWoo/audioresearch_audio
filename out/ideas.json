@@ -459,6 +459,38 @@
       "next_action": "A near-field compression cure that is NOT time-resolution: candidates are (a) a small per-image scale correction learned from the coarse layout, (b) the log-depth output parameterisation (predict log-depth so equal RATIO errors are penalised equally, matching d1), (c) revisiting the loss now that the diagnosis is metric-shaped rather than range-shaped.",
       "diagnosis": "FULL-VAL spatial characterisation of the 1-2m near-field gap (52.5% of pixels):\n  (1) BOUNDARY vs INTERIOR: the gap is entirely INTERIOR. On depth discontinuities RayDPT ties batvision (0.4447 vs 0.4471); on flat wall interiors it trails by +0.0196. So it is NOT the x8 decode upsample blurring edges -- it is absolute depth on smooth surfaces.\n  (2) BIAS vs VARIANCE: RayDPT's interior bias (+0.132m) and std (0.718m) are both SMALLER than batvision's (+0.175m, 0.762m). Better mean, worse d1.\n  (3) RATIO DISTRIBUTION resolves the paradox: d1 is a +-25% threshold. RayDPT piles 32% of pixels at pred/gt 0.9-1.0 (slightly under) where batvision piles 40% at 1.0-1.11 (dead centre). RayDPT also has a thicker under-prediction tail (<0.8: 9.8% vs 7.8%). Same compression as the far field -- masked-MAE pulls walls slightly NEAR -- but the near field is half the pixels.\n  (4) EchoDelayVolume does NOT fix it: on 1-2m interiors E24 vs E21 is -0.0031. The volume is far-field-only; near-field compression needs a different mechanism.",
       "reframing": "The champion's real deficit is near-field range compression on flat walls, a metric-shaped effect (median-pull just under the +-25% band), unreached by the entire echo-delay line. It is the same disease as the far field but in the 50%-of-pixels band and NOT curable by the same tool."
+    },
+    {
+      "id": "I25",
+      "status": "probing",
+      "priority": "high",
+      "origin": "I24 diagnosis -- near-field median-pull is metric-shaped, not range-shaped",
+      "target_bottleneck": "masked-MAE on normalised depth optimises the ARITHMETIC median, which sits below the geometric median (pred/gt ratio 1) that d1 rewards",
+      "mechanism_family": "depth objective / output parameterisation",
+      "causal_distance": "mid",
+      "general_hypothesis": "d1 is a +-25% RATIO threshold. A model that minimises absolute error on linear depth converges to the conditional arithmetic median, which for a right-skewed depth posterior is pulled BELOW the geometric median -- so predictions land at ratio 0.9-1.0, just under the band centre, exactly the near-field pattern I24 measured. Regressing in log-depth makes the optimum the geometric median (ratio 1), aligning the model's fixed point with the metric.",
+      "detailed_hypothesis": "Output D = exp(log d_min + sigmoid(head) * log(1/d_min)) instead of sigmoid(head). Same parameters, same masked-MAE code; only the map from the head's logit to depth changes, from linear to geometric. The model's free variable is now log-depth.",
+      "expected_metric_effect": "1-2m INTERIOR d1 rises toward batvision's 0.7719; overall d1 rises. If only ABS_REL moves, or the interior does not improve, it failed.",
+      "main_falsification_condition": "1-2m interior d1 does not improve over E23 -> drop, whatever the composite does.",
+      "distinct_from_I13": "I13 re-WEIGHTED the loss (|D-gt|/gt) on a RANGE-shaped mis-diagnosis and failed. I25 re-PARAMETERISES the output on a correct METRIC-shaped diagnosis (median-pull). Different intervention, different diagnosis.",
+      "budget_risk": "none; +0 params, +0 cost.",
+      "evidence_required": "near-field interior d1 improvement.",
+      "next_action": "E32 running; control E23."
+    },
+    {
+      "id": "I26",
+      "status": "probing",
+      "origin": "two independent diagnoses cure two non-overlapping deficits",
+      "target_bottleneck": "combine near-field median-pull cure (log-out) with far-field range cure (EchoDelayVolume)",
+      "mechanism_family": "combine",
+      "causal_distance": "mid",
+      "general_hypothesis": "E30 failed to combine two far-field cures because they carried the SAME information. log-out (near) and EchoDelayVolume (far) target DIFFERENT, non-overlapping deficits, so they should compose. This is the combine the two diagnoses jointly predict.",
+      "detailed_hypothesis": "--depth-out log --depth-volume True on the champion. log-out fixes the 52.5%-of-pixels near field; EchoDelayVolume fixes the 5%-of-pixels far field. Control E23; also compare vs E32 (log alone) to confirm additivity.",
+      "expected_metric_effect": "both the 1-2m interior AND the 7-10m deciles improve; the composite gains from both.",
+      "main_falsification_condition": "no improvement over the better of E32 / E24-transplanted -> the two do not compose after all.",
+      "budget_risk": "low; EchoDelayVolume is +12 s/epoch.",
+      "evidence_required": "joint near+far improvement.",
+      "next_action": "E33 running."
     }
   ],
   "discrepancies": [

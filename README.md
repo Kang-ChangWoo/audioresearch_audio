@@ -7,19 +7,19 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 
 | | |
 |---|---|
-| **Mode** | `SYNTHESIZE` — no runs; review evidence, find contradictions, pick the highest-information next question |
-| **Active study** | `G2` [new] echo-delay-volume (*concluded*) |
-| **Research question** | D13 showed decoder-side far-field time structure saturates at e3's 64 columns. The remaining question is binary: is the limit the ENCODER (which pooled 512->64 before the volume read it) or the SENSOR |
-| **Current action** | E31 raydpt_e31_ede_raw: --depth-volume-src raw on the fast parent. |
-| **Latest result** | `E31` : composite **1.9008** (rmse None, d1 None, abs_rel None), best epoch None/None |
-| **Next decision** | Pre-registered: the 7-10m deciles must improve over E24 (1.8987), or the entire time-resolution line closes and the far field is declared sensor-limited (a scoped ceiling, I7). Judge on far deciles an |
-| **Why this mode** | User asked to open the representation lever. Did: two zero-GPU probes refuted coherence and late-tail energy as far-field cues (I23), confirming D13's sensor-limit at the representation level. But the |
+| **Mode** | `EXPLOIT` — adaptive HPO ladder 3 -> 5 -> 7 -> 10, each step justified by evidence -> PASS / FAIL |
+| **Active study** | `H0` [new] depth-objective (*running*) |
+| **Research question** | The champion's residual gap is near-field median-pull compression (I24): masked-MAE on linear depth converges to the arithmetic median, below the geometric median that d1's ratio threshold rewards, so |
+| **Current action** | E32 --depth-out log; E33 --depth-out log --depth-volume True. Champion arch, control E23 (1.8962). |
+| **Latest result** | *(no scored run in this study yet)* |
+| **Next decision** | Judge on 1-2m INTERIOR d1 (the diagnosed locus) FIRST, then overall d1. ABS_REL is not evidence. Distinct from I13: that re-weighted the loss on a range mis-diagnosis; this re-parameterises the output |
+| **Why this mode** | I24 diagnosed the champion's deficit as near-field median-pull, a metric-shaped effect. log-depth output re-parameterises the model so its optimum is the geometric median (ratio 1), matching d1. This  |
 
 ### Current hypothesis
 
-- **General** — D13 showed decoder-side far-field time structure saturates at e3's 64 columns. The remaining question is binary: is the limit the ENCODER (which pooled 512->64 before the volume read it) or the SENSOR (two-mic observability, I7)?
-- **Detailed** — Read the STFT spec directly (512 time columns, 2 cm depth spacing, encoder bypassed). Improvement over E24 => encoder-limited. Saturation => sensor-limited, closing the time-resolution line.
-- **Implementation note** — E31 raydpt_e31_ede_raw: --depth-volume-src raw on the fast parent.
+- **General** — The champion's residual gap is near-field median-pull compression (I24): masked-MAE on linear depth converges to the arithmetic median, below the geometric median that d1's ratio threshold rewards, so flat walls land just under. Regressing log-depth moves the optimum to the geometric median.
+- **Detailed** — D = exp-map of sigmoid(head) instead of sigmoid(head). Re-parameterisation only. E32 log-out alone; E33 log-out + EchoDelayVolume (near + far cures, non-overlapping).
+- **Implementation note** — E32 --depth-out log; E33 --depth-out log --depth-volume True. Champion arch, control E23 (1.8962).
 
 ### Research portfolio
 
@@ -33,6 +33,8 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 | `I14` | ray conditioning / audio token routing | mid | far-field rays cannot see the late, weak echo that carries distance | probing | E16 (control) then E15b (treatment), both at lr 6e-4. Pre-registered falsification unchang |
 | `I19` | ray conditioning / physically-structured decoding | far | the model must LEARN that echo delay encodes depth, and it fails to, collapsing far surfaces toward the median | inconclusive | Do NOT crown. Test the ONE compatible combination the scope predicts: EchoDelayVolume + fi |
 | `I24` | reframing / where-the-gain-is | n/a (redirection) | the 1-2 m near field, which is 52.5% of pixels and over half the total d1 gap to batvision | candidate | A near-field compression cure that is NOT time-resolution: candidates are (a) a small per- |
+| `I25` | depth objective / output parameterisation | mid | masked-MAE on normalised depth optimises the ARITHMETIC median, which sits below the geometric median (pred/gt ratio 1) that d1 rewards | probing | E32 running; control E23. |
+| `I26` | combine | mid | combine near-field median-pull cure (log-out) with far-field range cure (EchoDelayVolume) | probing | E33 running. |
 
 ### Open discrepancies
 
@@ -49,6 +51,7 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 
 | When | Mode | Event | Note |
 |---|---|---|---|
+| 2026-07-12T01:42 | `exploit` | idea_added | log-depth output cures near-field median-pull. d1 is a +-25% ratio threshold; masked-MAE on linear depth converges to the arithmet |
 | 2026-07-12T01:31 | `synthesize` | discrepancy_recorded | Near-field diagnosis (1-2m, 52.5% of pixels): the gap is INTERIOR (flat walls), not boundary -- ties batvision on edges (0.4447 vs |
 | 2026-07-12T01:27 | `synthesize` | direction_changed | Representation lever OPENED per request and REFUTED at zero GPU: coherence correlates +0.17 (wrong sign) and late-tail waveform en |
 | 2026-07-11T21:36 | `synthesize` | experiment_completed | DECISIVE FAIL. Bypassing encoder time pooling (raw STFT, 512 time cols, freq matched to e3) still regressed the far deciles ~0.04  |
@@ -56,7 +59,6 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 | 2026-07-11T20:29 | `exploit` | idea_added | D13's decider. EchoDelayVolume reading the STFT spec DIRECTLY (512 time columns, 2cm spacing, encoder pooling bypassed). If the fa |
 | 2026-07-11T05:36 | `synthesize` | experiment_completed | EchoDelayVolume + kv=e3 FAILED the pre-registered far-decile test (all three regressed vs E24) and was budget-starved (16 vs 24 ep |
 | 2026-07-11T04:41 | `exploit` | experiment_completed | EchoDelayVolume on e2 (time 128, 2x delay resolution): composite 1.9006 vs E24's 1.8987, delta +0.0019 below sigma, converged. The |
-| 2026-07-11T03:26 | `synthesize` | divergence_checkpoint | DC2 after F0/F1/G0. Six competing hypotheses across five families (time resolution, combine, decoder/skip, data sampling, sensing  |
 
 *Updated by `python utils/report.py research`. Champion: none yet.*
 <!-- RESEARCH:END -->

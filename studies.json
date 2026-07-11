@@ -4,7 +4,7 @@
   "reset_note": "Fresh from original baseline f677b0f + mask-weighted coarse/low loss targets + composite abs_rel weight 0.75->0.35 + PLANAR (cubemap) depth target.",
   "depth_convention": "planar (cubemap perpendicular-Z); stored erp_depth used as-is; radial_factor removed",
   "metric": "composite (selection) = rmse/1.6 + (1-d1)/0.46 + 0.35*abs_rel  (lower better; RMSE+d1 dominate; abs_rel de-weighted)",
-  "next_exp_id": "E32",
+  "next_exp_id": "E34",
   "global_champion": null,
   "concluded_studies": [
     {
@@ -399,37 +399,24 @@
       ]
     }
   ],
-  "mode": "synthesize",
-  "mode_reason": "User asked to open the representation lever. Did: two zero-GPU probes refuted coherence and late-tail energy as far-field cues (I23), confirming D13's sensor-limit at the representation level. But the pixel-weighted decomposition redirects the whole effort: the far field is 1-5% of pixels, while 1-2m is 52.5% and over half the d1 gap. The lever is the NEAR field (I24), which five studies of far-field work never touched.",
+  "mode": "exploit",
+  "mode_reason": "I24 diagnosed the champion's deficit as near-field median-pull, a metric-shaped effect. log-depth output re-parameterises the model so its optimum is the geometric median (ratio 1), matching d1. This is the fix the diagnosis directly implies.",
   "studies_since_synthesize": 0,
   "portfolio": "out/ideas.json",
   "decision_log": "out/decision_log.jsonl",
   "active_study": {
-    "study_id": "G2",
-    "lineage": "echo-delay-volume",
-    "parent": "E24 (fast parent)",
+    "study_id": "H0",
+    "lineage": "depth-objective",
+    "parent": "E23 (champion)",
     "type": "new",
-    "status": "concluded",
-    "general_hypothesis": "D13 showed decoder-side far-field time structure saturates at e3's 64 columns. The remaining question is binary: is the limit the ENCODER (which pooled 512->64 before the volume read it) or the SENSOR (two-mic observability, I7)?",
-    "detailed_hypothesis": "Read the STFT spec directly (512 time columns, 2 cm depth spacing, encoder bypassed). Improvement over E24 => encoder-limited. Saturation => sensor-limited, closing the time-resolution line.",
-    "experiment_note": "E31 raydpt_e31_ede_raw: --depth-volume-src raw on the fast parent.",
+    "status": "running",
+    "general_hypothesis": "The champion's residual gap is near-field median-pull compression (I24): masked-MAE on linear depth converges to the arithmetic median, below the geometric median that d1's ratio threshold rewards, so flat walls land just under. Regressing log-depth moves the optimum to the geometric median.",
+    "detailed_hypothesis": "D = exp-map of sigmoid(head) instead of sigmoid(head). Re-parameterisation only. E32 log-out alone; E33 log-out + EchoDelayVolume (near + far cures, non-overlapping).",
+    "experiment_note": "E32 --depth-out log; E33 --depth-out log --depth-volume True. Champion arch, control E23 (1.8962).",
     "hpo_stage": "structural-screen",
     "hpo_runs_used": 0,
-    "runs": [
-      {
-        "exp_id": "E31",
-        "composite": 1.9008,
-        "far_delta": "-0.04",
-        "verdict": "FAIL; encoder bypass did not help"
-      }
-    ],
-    "decision_rule": "Pre-registered: the 7-10m deciles must improve over E24 (1.8987), or the entire time-resolution line closes and the far field is declared sensor-limited (a scoped ceiling, I7). Judge on far deciles and d1.",
-    "conclusion": "FAIL -> far field is SENSOR-limited (D13 resolved)",
-    "observations": [
-      "Bypassing encoder time pooling (raw STFT, 512 cols) regressed the far field ~0.04. The encoder was not the bottleneck.",
-      "Five echo-delay runs converge: first dose helps, all further time-resolution increases saturate or hurt. Far field is sensor-limited (I7).",
-      "The time-resolution research line is CLOSED. The far-field lever moves to the representation or is a scoped ceiling."
-    ]
+    "runs": [],
+    "decision_rule": "Judge on 1-2m INTERIOR d1 (the diagnosed locus) FIRST, then overall d1. ABS_REL is not evidence. Distinct from I13: that re-weighted the loss on a range mis-diagnosis; this re-parameterises the output on a metric diagnosis."
   },
   "backlog": [
     {

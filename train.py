@@ -122,6 +122,7 @@ def make_config(args):
             coarse_norm=args.coarse_norm,
             depth_volume=args.depth_volume,
             depth_volume_src=args.depth_volume_src,
+            depth_out=args.depth_out,
             # ray-feature bank flags
             use_xyz=True,
             use_fourier_pe=True,
@@ -453,6 +454,11 @@ class RayDPT(nn.Module):
                              if bool(getattr(cfg, "depth_volume", False)) else None)
         self.coarse_head = nn.Conv2d(dim, 1, 1)
         self.head = nn.Sequential(conv_bn(dim, ngf), conv_bn(ngf, ngf), nn.Conv2d(ngf, 1, 3, 1, 1))
+        # log-depth output (I25): map sigmoid(head) -> depth GEOMETRICALLY over [d_min, 1] (normalised).
+        self.depth_out = str(getattr(cfg, "depth_out", "linear"))
+        _dmin = 0.02                                          # normalised floor (0.2 m); log needs d>0
+        self.register_buffer("_log_dmin", torch.tensor(math.log(_dmin)))
+        self.register_buffer("_log_span", torch.tensor(-math.log(_dmin)))   # log(1) - log(dmin)
         self.lite = getattr(cfg, "raydpt_lite", False)        # 2-scale (32,64) lite variant
         self.decode_scale = int(getattr(cfg, "decode_scale", 64))
         # Which audio tokens the 32-scale rays attend to. 'e3' = 2048 fine tokens (original);
@@ -510,7 +516,17 @@ class RayDPT(nn.Module):
             if self.decode_scale == 64:
                 F64 = self._cross(self.rp64, self.rf64, self.cr64, kv4, B, 64, 128)
                 x = self.lsa64(self.refine64(self.up(x) + F64 + self.se2(e2)))  # 64x128
-        D = torch.sigmoid(self.head(x))
+        h = self.head(x)
+        if self.depth_out == "log":
+            # Regress in LOG-DEPTH, then exponentiate. sigmoid(h) in [0,1] maps to depth in
+            # [d_min, max_depth] GEOMETRICALLY: log d = log d_min + sigmoid(h) * log(max/d_min).
+            # masked-MAE on the LINEAR out['D'] still runs, but because the model's free variable
+            # is log-depth, its optimum is the conditional GEOMETRIC median, which sits at pred/gt
+            # ratio 1 rather than being pulled to a smaller arithmetic median. That matches d1,
+            # a +-25% RATIO threshold, and directly targets the near-field median-pull (I24/I25).
+            D = torch.exp(self._log_dmin + torch.sigmoid(h) * self._log_span)
+        else:
+            D = torch.sigmoid(h)
         D = F.interpolate(D, (self.H, self.W), mode="bilinear", align_corners=False)
         return {"D": D, "D0": D, "extras": {"D_coarse": d_c}}
 
@@ -922,6 +938,10 @@ def parse_args():
     # --- architecture knobs the GPU profiler showed dominate (see README "fast baseline") ---
     p.add_argument('--depth-volume-src', type=str, default='e3', choices=['e3', 'e2', 'raw'],
                    help='which encoder scale EchoDelayVolume reads. e3 = time 64, e2 = time 128, raw = the STFT spec itself (time 512, encoder BYPASSED; idea D13).')
+    p.add_argument('--depth-out', type=str, default='linear', choices=['linear', 'log'],
+                   help='output parameterisation. linear = sigmoid depth (median-pull to arithmetic '
+                        'median). log = regress log-depth (optimum at the GEOMETRIC median, ratio 1), '
+                        'which matches d1\'s +-25%% ratio threshold and targets near-field compression (I25).')
     p.add_argument('--depth-volume', type=lambda s: s == 'True', default=False,
                    help='EchoDelayVolume: per-ray soft-argmax over echo delay, replacing the scalar '
                         'sigmoid coarse head. The encoder width axis IS time, so its 64 columns are '
