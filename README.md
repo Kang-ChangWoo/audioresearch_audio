@@ -51,6 +51,7 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 
 | When | Mode | Event | Note |
 |---|---|---|---|
+| 2026-07-12T02:53 | `exploit` | experiment_completed | log-depth output: composite 1.9102 vs E23 1.8962 (+0.0140 worse), overall d1 -0.0044, converged. NOT the test -- the pre-registere |
 | 2026-07-12T01:42 | `exploit` | idea_added | log-depth output cures near-field median-pull. d1 is a +-25% ratio threshold; masked-MAE on linear depth converges to the arithmet |
 | 2026-07-12T01:31 | `synthesize` | discrepancy_recorded | Near-field diagnosis (1-2m, 52.5% of pixels): the gap is INTERIOR (flat walls), not boundary -- ties batvision on edges (0.4447 vs |
 | 2026-07-12T01:27 | `synthesize` | direction_changed | Representation lever OPENED per request and REFUTED at zero GPU: coherence correlates +0.17 (wrong sign) and late-tail waveform en |
@@ -58,7 +59,6 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 | 2026-07-11T20:31 | `exploit` | experiment_completed | First attempt OOMed (raw logits 9GB at batch64; CPU smoke at batch2 hid it -- lesson: smoke at the real batch). Fixed with freq_st |
 | 2026-07-11T20:29 | `exploit` | idea_added | D13's decider. EchoDelayVolume reading the STFT spec DIRECTLY (512 time columns, 2cm spacing, encoder pooling bypassed). If the fa |
 | 2026-07-11T05:36 | `synthesize` | experiment_completed | EchoDelayVolume + kv=e3 FAILED the pre-registered far-decile test (all three regressed vs E24) and was budget-starved (16 vs 24 ep |
-| 2026-07-11T04:41 | `exploit` | experiment_completed | EchoDelayVolume on e2 (time 128, 2x delay resolution): composite 1.9006 vs E24's 1.8987, delta +0.0019 below sigma, converged. The |
 
 *Updated by `python utils/report.py research`. Champion: none yet.*
 <!-- RESEARCH:END -->
@@ -119,6 +119,7 @@ running best highlighted):
 | 25 | `00bdb13` | 0.4128 | 1.3228 | 0.5725 | 1.9006 | keep | E29 EchoDelayVolume on e2 (time 128, 2x delay resolution) fast parent (G1/I20) |
 | 26 | `00bdb13` | 0.4528 | 1.3372 | 0.5600 | 1.9508 | keep | E30 EchoDelayVolume + cross_kv32=e3 (combine, fast parent) (G1/I21) |
 | 27 | `b066475` | 0.4350 | 1.3108 | 0.5725 | 1.9008 | keep | E31 EchoDelayVolume reads raw STFT (time 512, encoder time-pooling bypassed) (G2/I22) |
+| 28 | `54678e3` | 0.4166 | 1.3346 | 0.5721 | 1.9102 | keep | E32 log-depth output (I25: cure near-field median-pull) |
 <!-- RESULTS:END -->
 
 ## Progression (composite, lower = better)

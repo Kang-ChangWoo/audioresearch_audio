@@ -475,7 +475,9 @@
       "distinct_from_I13": "I13 re-WEIGHTED the loss (|D-gt|/gt) on a RANGE-shaped mis-diagnosis and failed. I25 re-PARAMETERISES the output on a correct METRIC-shaped diagnosis (median-pull). Different intervention, different diagnosis.",
       "budget_risk": "none; +0 params, +0 cost.",
       "evidence_required": "near-field interior d1 improvement.",
-      "next_action": "E32 running; control E23."
+      "next_action": "E32 running; control E23.",
+      "composite": "E32 composite 1.9102 vs E23 1.8962, +0.0140 (worse), overall d1 -0.0044. Converged (best 15/22). But composite/overall-d1 are NOT the test -- the pre-registered locus is 1-2m interior d1, pending behind E33.",
+      "caveat_to_check": "A subtlety in the implementation: the model regresses log-depth, but masked-MAE is still applied to the LINEAR out['D']. So the model's free variable is log d, yet the LOSS is |D_lin - gt_lin|. Whether that alone moves the optimum from arithmetic to geometric median depends on how the sigmoid+exp curvature interacts with the linear MAE -- it is not guaranteed by construction the way it would be if the loss itself were in log space. The near-field diagnostic is the real test; if it fails, the cleaner form is masked-MAE ON log-depth (|log D - log gt|), which is unambiguously the geometric-median objective."
     },
     {
       "id": "I26",
