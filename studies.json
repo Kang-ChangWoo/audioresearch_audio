@@ -400,7 +400,7 @@
     }
   ],
   "mode": "synthesize",
-  "mode_reason": "D13 resolved sensor-limited after a decisive five-run convergence. The entire time-resolution line (representation window, encoder pooling, volume bins, token routing) is exhausted. A divergence checkpoint must either open the representation lever (more range cues) or state the far-field ceiling with scope -- and reconsider whether the near/mid field, where RayDPT already matches or beats batvision, is where remaining gains actually are.",
+  "mode_reason": "User asked to open the representation lever. Did: two zero-GPU probes refuted coherence and late-tail energy as far-field cues (I23), confirming D13's sensor-limit at the representation level. But the pixel-weighted decomposition redirects the whole effort: the far field is 1-5% of pixels, while 1-2m is 52.5% and over half the d1 gap. The lever is the NEAR field (I24), which five studies of far-field work never touched.",
   "studies_since_synthesize": 0,
   "portfolio": "out/ideas.json",
   "decision_log": "out/decision_log.jsonl",

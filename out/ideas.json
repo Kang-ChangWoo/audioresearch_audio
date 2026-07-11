@@ -428,6 +428,35 @@
       "cleaner_than_planned": "This is a BETTER test than intended: raw now differs from e3 ONLY in time resolution (512 vs 64), not frequency. A pure encoder-time-pooling probe.",
       "why_dropped": "PRE-REGISTERED FALSIFICATION FAILED, decisively. Bypassing the encoder's 8x time pooling entirely -- EchoDelayVolume reading the STFT's 512 time columns at 2cm spacing, frequency matched to e3 so ONLY time differs -- made the far deciles WORSE, not better: 7-8m -0.0489, 8-9m -0.0412, 9-10m -0.0421 vs E24. Mean predicted depth at GT 8-9m FELL from 5.238m to 5.092m. The encoder's time pooling was NOT the bottleneck.",
       "closes_the_line": "This is the decider D13 asked for, and it settles branch B. Across FIVE runs -- E24 (bare, helps), E27 (dense), E29 (finer bins), E30 (fine tokens), E31 (raw, encoder bypassed) -- the first dose of echo-delay time structure helps and every subsequent increase in time resolution, by any path, does nothing or hurts. Far-field d1 is NOT limited by time resolution anywhere in the pipeline. The remaining candidate is the SENSOR: two microphones under-determine range/angle for far, faint echoes (I7)."
+    },
+    {
+      "id": "I23",
+      "status": "dropped",
+      "origin": "user request to open the representation lever after D13 (sensor-limited far field)",
+      "target_bottleneck": "more range information from two microphones (coherence / late-tail energy)",
+      "mechanism_family": "acoustic-representation",
+      "causal_distance": "far",
+      "general_hypothesis": "If the far field is sensor-limited, the only remaining far-field lever is a representation that extracts more range information the current 5ch stack discards.",
+      "why_dropped": "REFUTED at zero GPU by two waveform-level correlation probes. (1) Magnitude-squared coherence -- which should fall for distant, reverberant scenes -- correlates only +0.17 with mean depth and the WRONG sign with far-surface fraction. (2) Late-tail waveform energy (round-trip 14-20m, where far echoes arrive) correlates only -0.30 with far-surface fraction, again the wrong sign. The range signal for distant surfaces is not strongly present in the two-mic waveform in a form a representation could surface. This confirms D13's sensor-limit at the representation level, not just the architecture level.",
+      "scope_of_negative_evidence": "Refutes coherence and late-tail energy as far-field cues on this dataset. It does not test multi-resolution STFT, which combines windows rather than re-deriving a single statistic -- but see I24 for why that is deprioritised.",
+      "next_action": "none. The far field is sensor-limited at both the architecture (D13) and representation levels."
+    },
+    {
+      "id": "I24",
+      "status": "backlog",
+      "priority": "high",
+      "origin": "pixel-weighted decomposition of the d1 gap -- the far field is 1% of pixels",
+      "target_bottleneck": "the 1-2 m near field, which is 52.5% of pixels and over half the total d1 gap to batvision",
+      "mechanism_family": "reframing / where-the-gain-is",
+      "causal_distance": "n/a (redirection)",
+      "general_hypothesis": "I spent five studies on far-field range compression because its per-pixel gap is dramatic (+0.12 to +0.17). But the far field (7-10m) is only 5% of pixels; weighted by pixel count it contributes +0.0070 of the d1 gap. The 1-6m field is 77% of pixels and +0.0172 -- and 1-2m ALONE is 52.5% of pixels and where RayDPT trails batvision by +0.0195, over half the total. The productive lever is the NEAR field, not the far.",
+      "detailed_hypothesis": "At 1-2m RayDPT scores d1 0.7506 vs batvision 0.7700. These are the room walls -- strong, early, well-localised echoes. The question is why a ray-conditioned model with per-direction queries loses to a plain U-Net exactly where the signal is strongest. Candidates: the x8 decode upsample blurs near-field boundaries (I2 was refuted for the far field but near-field edges are different); or the DPT skips' pixel-index correspondence (I5) hurts most where structure is sharp.",
+      "expected_metric_effect": "any near-field mechanism should move the 1-2m decile, which dominates the pixel-weighted metric.",
+      "main_falsification_condition": "the 1-2m decile does not respond to near-field-targeted changes -> the near-field gap is also sensor/data-limited.",
+      "minimal_falsifiable_test": "first a diagnostic: WHERE in 1-2m does RayDPT lose -- edges (boundary pixels) or interiors? Compare d1 on boundary vs interior masks. Zero GPU on existing checkpoints.",
+      "budget_risk": "none for the diagnostic.",
+      "evidence_required": "a spatial characterisation of the 1-2m loss before any architecture change.",
+      "next_action": "boundary-vs-interior d1 diagnostic at 1-2m, on E23 and batvision."
     }
   ],
   "discrepancies": [

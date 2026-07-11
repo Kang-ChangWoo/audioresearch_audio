@@ -13,7 +13,7 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 | **Current action** | E31 raydpt_e31_ede_raw: --depth-volume-src raw on the fast parent. |
 | **Latest result** | `E31` : composite **1.9008** (rmse None, d1 None, abs_rel None), best epoch None/None |
 | **Next decision** | Pre-registered: the 7-10m deciles must improve over E24 (1.8987), or the entire time-resolution line closes and the far field is declared sensor-limited (a scoped ceiling, I7). Judge on far deciles an |
-| **Why this mode** | D13 resolved sensor-limited after a decisive five-run convergence. The entire time-resolution line (representation window, encoder pooling, volume bins, token routing) is exhausted. A divergence check |
+| **Why this mode** | User asked to open the representation lever. Did: two zero-GPU probes refuted coherence and late-tail energy as far-field cues (I23), confirming D13's sensor-limit at the representation level. But the |
 
 ### Current hypothesis
 
@@ -32,6 +32,7 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 | `I10` | acoustic-representation / interpolation | mid | the nearest-neighbour resize in _features() turns the time axis into a coarse staircase | inconclusive | deferred confirm: run `--feat-interp bilinear --stft-hop 40` after the RayDPT throughput s |
 | `I14` | ray conditioning / audio token routing | mid | far-field rays cannot see the late, weak echo that carries distance | probing | E16 (control) then E15b (treatment), both at lr 6e-4. Pre-registered falsification unchang |
 | `I19` | ray conditioning / physically-structured decoding | far | the model must LEARN that echo delay encodes depth, and it fails to, collapsing far surfaces toward the median | inconclusive | Do NOT crown. Test the ONE compatible combination the scope predicts: EchoDelayVolume + fi |
+| `I24` | reframing / where-the-gain-is | n/a (redirection) | the 1-2 m near field, which is 52.5% of pixels and over half the total d1 gap to batvision | backlog | boundary-vs-interior d1 diagnostic at 1-2m, on E23 and batvision. |
 
 ### Open discrepancies
 
@@ -48,6 +49,7 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 
 | When | Mode | Event | Note |
 |---|---|---|---|
+| 2026-07-12T01:27 | `synthesize` | direction_changed | Representation lever OPENED per request and REFUTED at zero GPU: coherence correlates +0.17 (wrong sign) and late-tail waveform en |
 | 2026-07-11T21:36 | `synthesize` | experiment_completed | DECISIVE FAIL. Bypassing encoder time pooling (raw STFT, 512 time cols, freq matched to e3) still regressed the far deciles ~0.04  |
 | 2026-07-11T20:31 | `exploit` | experiment_completed | First attempt OOMed (raw logits 9GB at batch64; CPU smoke at batch2 hid it -- lesson: smoke at the real batch). Fixed with freq_st |
 | 2026-07-11T20:29 | `exploit` | idea_added | D13's decider. EchoDelayVolume reading the STFT spec DIRECTLY (512 time columns, 2cm spacing, encoder pooling bypassed). If the fa |
@@ -55,7 +57,6 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 | 2026-07-11T04:41 | `exploit` | experiment_completed | EchoDelayVolume on e2 (time 128, 2x delay resolution): composite 1.9006 vs E24's 1.8987, delta +0.0019 below sigma, converged. The |
 | 2026-07-11T03:26 | `synthesize` | divergence_checkpoint | DC2 after F0/F1/G0. Six competing hypotheses across five families (time resolution, combine, decoder/skip, data sampling, sensing  |
 | 2026-07-11T03:24 | `synthesize` | experiment_completed | Champion + EchoDelayVolume, converged (cosine annealed to lr 0): composite 1.9271, WORSE than E23 by 0.0309, and the far deciles i |
-| 2026-07-11T00:42 | `verify` | discrepancy_recorded | D12: the same mechanism beats its control on the fast parent (+0.0112) and loses on the champion parent (-0.0121), both above sigm |
 
 *Updated by `python utils/report.py research`. Champion: none yet.*
 <!-- RESEARCH:END -->
