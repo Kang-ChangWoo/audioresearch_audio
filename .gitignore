@@ -79,3 +79,5 @@ out/.g4.lock
 out/g4_driver.log
 out/.h0.lock
 out/h0_driver.log
+out/.h1.lock
+out/h1_driver.log

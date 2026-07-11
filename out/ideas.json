@@ -462,7 +462,7 @@
     },
     {
       "id": "I25",
-      "status": "probing",
+      "status": "dropped",
       "priority": "high",
       "origin": "I24 diagnosis -- near-field median-pull is metric-shaped, not range-shaped",
       "target_bottleneck": "masked-MAE on normalised depth optimises the ARITHMETIC median, which sits below the geometric median (pred/gt ratio 1) that d1 rewards",
@@ -477,11 +477,14 @@
       "evidence_required": "near-field interior d1 improvement.",
       "next_action": "E32 running; control E23.",
       "composite": "E32 composite 1.9102 vs E23 1.8962, +0.0140 (worse), overall d1 -0.0044. Converged (best 15/22). But composite/overall-d1 are NOT the test -- the pre-registered locus is 1-2m interior d1, pending behind E33.",
-      "caveat_to_check": "A subtlety in the implementation: the model regresses log-depth, but masked-MAE is still applied to the LINEAR out['D']. So the model's free variable is log d, yet the LOSS is |D_lin - gt_lin|. Whether that alone moves the optimum from arithmetic to geometric median depends on how the sigmoid+exp curvature interacts with the linear MAE -- it is not guaranteed by construction the way it would be if the loss itself were in log space. The near-field diagnostic is the real test; if it fails, the cleaner form is masked-MAE ON log-depth (|log D - log gt|), which is unambiguously the geometric-median objective."
+      "caveat_to_check": "A subtlety in the implementation: the model regresses log-depth, but masked-MAE is still applied to the LINEAR out['D']. So the model's free variable is log d, yet the LOSS is |D_lin - gt_lin|. Whether that alone moves the optimum from arithmetic to geometric median depends on how the sigmoid+exp curvature interacts with the linear MAE -- it is not guaranteed by construction the way it would be if the loss itself were in log space. The near-field diagnostic is the real test; if it fails, the cleaner form is masked-MAE ON log-depth (|log D - log gt|), which is unambiguously the geometric-median objective.",
+      "why_dropped": "PRE-REGISTERED FALSIFICATION FAILED. 1-2m interior d1 did not move: E23 0.7523 -> E32 0.7521. The pred/gt ratio histogram is UNCHANGED -- still 32% piled at 0.9-1.0 (just under) vs batvision's 40% at 1.0-1.11 (centre). Re-parameterising the OUTPUT to log-depth while keeping masked-MAE on LINEAR depth does NOT move the optimum to the geometric median, exactly the loss-space subtlety flagged before the run: the free variable is log d but the loss is |D_lin - gt_lin|, so its optimum is still the arithmetic median.",
+      "correct_form": "The unambiguous fix is masked-MAE computed ON log-depth (|log D - log gt|), which IS the geometric-median objective by definition. That is main_loss=log_mae, already implemented (from I13). I25's mechanism survives; only its IMPLEMENTATION (output re-param) was wrong. Re-test as log_mae LOSS on the linear champion.",
+      "distinct_from_I13_note": "I13 tested log_mae as a loss but on the FAST parent and judged on far deciles (range mis-diagnosis). Here it is judged on the near-field interior (correct diagnosis) on the champion. Same knob, different hypothesis and locus -- a legitimate re-test, not a repeat."
     },
     {
       "id": "I26",
-      "status": "probing",
+      "status": "dropped",
       "origin": "two independent diagnoses cure two non-overlapping deficits",
       "target_bottleneck": "combine near-field median-pull cure (log-out) with far-field range cure (EchoDelayVolume)",
       "mechanism_family": "combine",
@@ -492,7 +495,26 @@
       "main_falsification_condition": "no improvement over the better of E32 / E24-transplanted -> the two do not compose after all.",
       "budget_risk": "low; EchoDelayVolume is +12 s/epoch.",
       "evidence_required": "joint near+far improvement.",
-      "next_action": "E33 running."
+      "next_action": "E33 running.",
+      "why_dropped": "E33 (log-out + EDE) 1-2m interior d1 0.7488 -- WORSE than E23, and its far deciles (7-8m 0.3069, 8-9m 0.2008) beat E32 but not E23's linear 8-9m 0.2306. With log-out itself refuted (I25), the combine has no near-field cure to contribute, and EDE on the champion loses as E27 already showed. Composite 1.8990, neutral vs E23.",
+      "what_survives": "Confirms once more that EchoDelayVolume on the champion (win5/ffn4) does not help the far field (E27's parent-dependence), independent of the output parameterisation."
+    },
+    {
+      "id": "I27",
+      "status": "backlog",
+      "priority": "high",
+      "origin": "I25's correct implementation -- put the loss, not the output, in log space",
+      "target_bottleneck": "near-field median-pull: the loss must optimise the geometric median, which requires the LOSS in log space, not the output",
+      "mechanism_family": "depth objective",
+      "causal_distance": "mid",
+      "general_hypothesis": "d1 is a ratio threshold, so its matching loss charges equal RATIO errors equally -- that is |log D - log gt|, whose optimum is the conditional geometric median (ratio 1). E32 showed re-parameterising the OUTPUT is insufficient; the LOSS itself must be in log space.",
+      "detailed_hypothesis": "main_loss=log_mae on the champion (linear output). Same masked structure, error measured as |log D - log gt|. Judge on 1-2m interior d1 and its ratio histogram: the 0.9-1.0 pile should shift toward 1.0-1.11.",
+      "expected_metric_effect": "1-2m interior d1 rises toward batvision's; the ratio histogram centres.",
+      "main_falsification_condition": "the ratio histogram does not shift -> the near-field pull is not loss-shaped and I27 (and the whole objective line) is done.",
+      "distinct_from_I13": "I13 ran log_mae on the FAST parent judged on FAR deciles (range mis-diagnosis, converged, failed there). I27 runs it on the CHAMPION judged on the NEAR-field interior (correct median-pull diagnosis). Different parent, different locus, different hypothesis.",
+      "budget_risk": "none.",
+      "evidence_required": "near-field ratio histogram shift.",
+      "next_action": "run --main-loss log_mae on the champion; control E23."
     }
   ],
   "discrepancies": [
