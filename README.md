@@ -32,7 +32,7 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 | `I10` | acoustic-representation / interpolation | mid | the nearest-neighbour resize in _features() turns the time axis into a coarse staircase | inconclusive | deferred confirm: run `--feat-interp bilinear --stft-hop 40` after the RayDPT throughput s |
 | `I14` | ray conditioning / audio token routing | mid | far-field rays cannot see the late, weak echo that carries distance | probing | E16 (control) then E15b (treatment), both at lr 6e-4. Pre-registered falsification unchang |
 | `I19` | ray conditioning / physically-structured decoding | far | the model must LEARN that echo delay encodes depth, and it fails to, collapsing far surfaces toward the median | inconclusive | Do NOT crown. Test the ONE compatible combination the scope predicts: EchoDelayVolume + fi |
-| `I24` | reframing / where-the-gain-is | n/a (redirection) | the 1-2 m near field, which is 52.5% of pixels and over half the total d1 gap to batvision | backlog | boundary-vs-interior d1 diagnostic at 1-2m, on E23 and batvision. |
+| `I24` | reframing / where-the-gain-is | n/a (redirection) | the 1-2 m near field, which is 52.5% of pixels and over half the total d1 gap to batvision | candidate | A near-field compression cure that is NOT time-resolution: candidates are (a) a small per- |
 
 ### Open discrepancies
 
@@ -49,6 +49,7 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 
 | When | Mode | Event | Note |
 |---|---|---|---|
+| 2026-07-12T01:31 | `synthesize` | discrepancy_recorded | Near-field diagnosis (1-2m, 52.5% of pixels): the gap is INTERIOR (flat walls), not boundary -- ties batvision on edges (0.4447 vs |
 | 2026-07-12T01:27 | `synthesize` | direction_changed | Representation lever OPENED per request and REFUTED at zero GPU: coherence correlates +0.17 (wrong sign) and late-tail waveform en |
 | 2026-07-11T21:36 | `synthesize` | experiment_completed | DECISIVE FAIL. Bypassing encoder time pooling (raw STFT, 512 time cols, freq matched to e3) still regressed the far deciles ~0.04  |
 | 2026-07-11T20:31 | `exploit` | experiment_completed | First attempt OOMed (raw logits 9GB at batch64; CPU smoke at batch2 hid it -- lesson: smoke at the real batch). Fixed with freq_st |
@@ -56,7 +57,6 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 | 2026-07-11T05:36 | `synthesize` | experiment_completed | EchoDelayVolume + kv=e3 FAILED the pre-registered far-decile test (all three regressed vs E24) and was budget-starved (16 vs 24 ep |
 | 2026-07-11T04:41 | `exploit` | experiment_completed | EchoDelayVolume on e2 (time 128, 2x delay resolution): composite 1.9006 vs E24's 1.8987, delta +0.0019 below sigma, converged. The |
 | 2026-07-11T03:26 | `synthesize` | divergence_checkpoint | DC2 after F0/F1/G0. Six competing hypotheses across five families (time resolution, combine, decoder/skip, data sampling, sensing  |
-| 2026-07-11T03:24 | `synthesize` | experiment_completed | Champion + EchoDelayVolume, converged (cosine annealed to lr 0): composite 1.9271, WORSE than E23 by 0.0309, and the far deciles i |
 
 *Updated by `python utils/report.py research`. Champion: none yet.*
 <!-- RESEARCH:END -->
