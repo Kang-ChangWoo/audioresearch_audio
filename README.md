@@ -50,14 +50,14 @@ Autonomous research — binaural echoes → ERP planar (cubemap) depth (SoundSpa
 
 | When | Mode | Event | Note |
 |---|---|---|---|
+| 2026-07-13T04:54 | `synthesize` | divergence_checkpoint | SYNTHESIS 2026-07-13: entire original backlog resolved + new families explored (throughput, echo-delay volume, depth objective, ca |
+| 2026-07-13T04:54 | `synthesize` | experiment_completed | eval-time L/R-flip TTA REFUTED (zero training): champion worse by 0.1186 composite. Planar GT differs from its width-flip by 0.638 |
 | 2026-07-13T04:51 | `synthesize` | experiment_completed | per-image scale head: composite +0.0220, d1 -0.0080. Moved the 1-2m centre 1.0-1.11 from 29.2%->32.5% (toward batvision) exactly a |
 | 2026-07-13T03:48 | `exploit` | candidate_dropped | (b) near-field ARCHITECTURE lever REFUTED at zero GPU. Oracle: 32x64 decode's 1-2m interior d1 ceiling is 0.9816 vs achieved 0.752 |
 | 2026-07-12T06:00 | `synthesize` | experiment_completed | log_huber held the tail exactly as designed (>1.25: 14.6% < E23's 15.0% < E34's 16.2%) but under-centred the bulk (+1.4% vs log_ma |
 | 2026-07-12T04:58 | `exploit` | idea_added | log_huber: Huber on the log-ratio with delta=log(1.25)=0.223, exactly d1's +-25% band. Quadratic inside (centres the 1-2m bulk 4x  |
 | 2026-07-12T04:46 | `synthesize` | experiment_completed | log_mae LOSS on champion: HALF-confirmed. The 1-2m ratio histogram moved exactly as predicted (0.9-1.0 pile 32.1->29.1%, centre 1. |
 | 2026-07-12T03:44 | `exploit` | candidate_dropped | FAILED pre-registered near-field test: 1-2m interior d1 unmoved (0.7523->0.7521), ratio histogram unchanged. Re-parameterising the |
-| 2026-07-12T02:53 | `exploit` | experiment_completed | log-depth output: composite 1.9102 vs E23 1.8962 (+0.0140 worse), overall d1 -0.0044, converged. NOT the test -- the pre-registere |
-| 2026-07-12T01:42 | `exploit` | idea_added | log-depth output cures near-field median-pull. d1 is a +-25% ratio threshold; masked-MAE on linear depth converges to the arithmet |
 
 *Updated by `python utils/report.py research`. Champion: none yet.*
 <!-- RESEARCH:END -->

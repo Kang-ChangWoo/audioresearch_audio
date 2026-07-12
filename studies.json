@@ -530,19 +530,21 @@
     {
       "lineage": "raydpt-baseline",
       "type": "new",
-      "idea": "E4: re-anchor RayDPT (train.py, 5ch log, flip-aug) under the planar target; this is the number the batvision grid is compared against. Must run before any RayDPT improvement."
+      "idea": "E4: re-anchor RayDPT (train.py, 5ch log, flip-aug) under the planar target; this is the number the batvision grid is compared against. Must run before any RayDPT improvement.",
+      "status": "DONE E4 (S1)"
     },
     {
       "lineage": "output-resolution",
       "type": "new",
       "priority": "high",
       "idea": "RayDPT decodes at 64x128 and bilinear-upsamples 4x to 256x512; batvision's U-Net decodes to full res. Add a 128x256 DPT scale (ray bank Q128 + se1 skip from e1) so the final upsample is only 2x.",
-      "why": "MEASURED (24 samples, 6 scenes): the planar target is PIECEWISE-CONSTANT -- a wall perpendicular to a cube face has constant planar depth, so the map is flat regions separated by SHARP steps at depth discontinuities. A 4x bilinear upsample smears exactly those steps, and d1 (a +-25% threshold metric) punishes blurred edges hard. Highest-value structural fix under the planar target. Costs VRAM -- screen before committing."
+      "why": "MEASURED (24 samples, 6 scenes): the planar target is PIECEWISE-CONSTANT -- a wall perpendicular to a cube face has constant planar depth, so the map is flat regions separated by SHARP steps at depth discontinuities. A 4x bilinear upsample smears exactly those steps, and d1 (a +-25% threshold metric) punishes blurred edges hard. Highest-value structural fix under the planar target. Costs VRAM -- screen before committing.",
+      "status": "REFUTED I2 oracle"
     },
     {
       "lineage": "geometric-head",
       "type": "new",
-      "status": "REFUTED-BEFORE-RUN",
+      "status": "REFUTED I4",
       "idea": "Predict the smooth radial field R and emit D = R * linf, linf = max(|dx|,|dy|,|dz|) as a fixed buffer, so the net never learns the cube-edge creases.",
       "why_refuted": "The premise is false. Measured grad-energy over 24 samples / 6 scenes: planar 0.01618, radial 0.01677; radial is smoother in only 17% of samples (mean ratio 1.035). PLANAR is already the smoother parameterisation -- for an axis-aligned room a wall perpendicular to a face has CONSTANT planar depth while radial curves as 1/cos. Reparameterising to radial would make the regression HARDER, not easier. Do not revive without new evidence."
     },
@@ -550,28 +552,34 @@
       "lineage": "training-optimization",
       "type": "tune",
       "priority": "high",
-      "idea": "Match --epochs to what the 1-hour budget actually fits (~24-26) so the cosine schedule anneals to zero inside the budget instead of being truncated mid-schedule. Observed on E0: best at epoch 14/26, then 12 epochs of overfitting (val loss 0.1871 -> 0.1925). Pair with weight decay / EMA."
+      "idea": "Match --epochs to what the 1-hour budget actually fits (~24-26) so the cosine schedule anneals to zero inside the budget instead of being truncated mid-schedule. Observed on E0: best at epoch 14/26, then 12 epochs of overfitting (val loss 0.1871 -> 0.1925). Pair with weight decay / EMA.",
+      "status": "training-optimization: partly done (I3/I18)"
     },
     {
       "lineage": "training-optimization",
       "type": "tune",
-      "idea": "Re-validate the June optimisation envelope under the fixed loss + planar target: bf16 AMP + bs32 + lr4e-4 + warmup-cosine + EMA0.995."
+      "idea": "Re-validate the June optimisation envelope under the fixed loss + planar target: bf16 AMP + bs32 + lr4e-4 + warmup-cosine + EMA0.995.",
+      "status": "training-optimization: partly done (I3/I18)"
     },
     {
       "lineage": "acoustic-representation",
       "type": "new",
-      "idea": "Re-validate the June representation wins: multi-res STFT (fine-time echo delay) + interaural coherence (direct-vs-diffuse)."
+      "idea": "Re-validate the June representation wins: multi-res STFT (fine-time echo delay) + interaural coherence (direct-vs-diffuse).",
+      "status": "CLOSED I1/D13 sensor-limited"
     },
     {
       "lineage": "inference-time-tta",
       "type": "new",
-      "idea": "Re-validate eval-time L/R-flip TTA."
+      "idea": "Re-validate eval-time L/R-flip TTA.",
+      "status": "REFUTED I31 (planar asymmetry)"
     },
     {
       "lineage": "simplification",
       "type": "refine",
-      "idea": "Drop the vestigial pix2pix encoder tail (24.44M->7.69M, provably equivalent) - re-apply early once baseline confirmed."
+      "idea": "Drop the vestigial pix2pix encoder tail (24.44M->7.69M, provably equivalent) - re-apply early once baseline confirmed.",
+      "status": "DONE I9 (dead tail deleted)"
     }
   ],
-  "fork_note": "RayDPT re-initialised from the E11 champion (composite 1.9093, d1 0.5710, 23 epochs, CONVERGED) rather than from the original E4 anchor, which never converged. Defaults now reproduce E11 plus two profiler-selected knobs (raydpt_win32 3, ffn_mult 2)."
+  "fork_note": "RayDPT re-initialised from the E11 champion (composite 1.9093, d1 0.5710, 23 epochs, CONVERGED) rather than from the original E4 anchor, which never converged. Defaults now reproduce E11 plus two profiler-selected knobs (raydpt_win32 3, ffn_mult 2).",
+  "synthesis_2026-07-13": "Every causal family in the original backlog is now resolved: baseline (E4), output-resolution (I2 oracle refuted), geometric-head (I4 refuted), training-optimization (I3/I18: lr 3e-4 unscaled is the fix, +0.0131), acoustic-representation (I1 refuted, D13 far field sensor-limited), TTA (I31 refuted, planar asymmetry), simplification (I9 dead-tail deleted). New families explored beyond the backlog: throughput (I8/I12, made RayDPT converge), echo-delay cost volume (I19, scoped far-field mechanism, PASS as hypothesis), depth objective (I13/I27/I28 median-pull, confirmed but not d1-convertible), output calibration (I30, same ceiling). BOTH residual deficits are confirmed ceilings: far field sensor-limited (5 runs), near field metric-shaped (4 mechanisms). RESULT: a 5.89M ray-conditioned RayDPT reaches composite 1.8962, within 0.0395 of a 54.41M plain U-Net (1.8567) -- a 9.2x-smaller model matching the reference to within a residual that is provably beyond the levers a decoder, loss, calibration, or test-time procedure can pull."
 }
